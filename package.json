@@ -1,0 +1,16 @@
+{
+  "name": "btwd-backend",
+  "version": "1.0.0",
+  "description": "",
+  "license": "MIT",
+  "author": "Bumblebee-3",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.4",
+    "googleapis": "^171.4.0"
+  }
+}

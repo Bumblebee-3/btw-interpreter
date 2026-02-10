@@ -1,0 +1,27 @@
+{
+  "name": "GoogleCalendar",
+  "description": "Read and manage Google Calendar events",
+  "entrypoint": "index.js",
+  "plugin_params": ["credentials_path", "token_path"],
+
+  "functions": [
+    {
+      "name": "getUpcomingEvents",
+      "description": "Get upcoming calendar events",
+      "async": true,
+      "requires_LLM": true,
+      "output_format":[],
+      "keywords": [
+        "calendar",
+        "schedule",
+        "events",
+        "meeting",
+        "today",
+        "tomorrow",
+        "this week",
+        "upcoming"
+      ],
+      "requires": ["$INPUT"]
+    }
+  ]
+}
