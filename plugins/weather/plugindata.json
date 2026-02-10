@@ -1,0 +1,45 @@
+{
+  "name": "Weather",
+  "description": "Get current weather and forecast information",
+  "entrypoint": "index.js",
+  "plugin_params": ["weather_api_key", "default_location"],
+
+  "functions": [
+    {
+      "name": "getWeather",
+      "description": "Fetch weather information for a location",
+      "async": true,
+      "requires_LLM": true,
+      "output_format": {
+        "location": "City, Country",
+        "current": {
+          "temperature_c": "number",
+          "condition": "string",
+          "humidity": "number",
+          "wind_kph": "number"
+        },
+        "forecast": [
+          {
+            "date": "YYYY-MM-DD",
+            "max_c": "number",
+            "min_c": "number",
+            "condition": "string",
+            "rain_chance": "percentage"
+          }
+        ]
+      },
+      "keywords": [
+        "weather",
+        "temperature",
+        "rain",
+        "forecast",
+        "hot",
+        "cold",
+        "today",
+        "tomorrow",
+        "week"
+      ],
+      "requires": ["$INPUT"]
+    }
+  ]
+}

@@ -22,7 +22,12 @@ intr.loadPlugins("./plugins/gmail/plugindata.json",{
     credentials_path:"./plugins/credentials.json",
     token_path:"./plugins/token.json"
 });
+
+intr.loadPlugins("./plugins/weather/plugindata.json",{
+    weather_api_key:process.env.wapi,
+    default_location:"mumbai"
+});
 async function a(){
-console.log(await intr.query("what is the latest email i recieved?"));
+console.log(await intr.query("what is the weather like today?"));
 }
 a();
