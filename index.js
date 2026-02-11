@@ -10,14 +10,14 @@ var intr = new Interpreter({
 config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key==""||!config.plugins.tavily.tavily_api_key)?process.env.tapi:config.plugins.tavily.tavily_api_key;
 config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key==""||!config.plugins.weather.weather_api_key)?process.env.wapi:config.plugins.weather.weather_api_key;
 
-intr.loadCommands("./commands.json")
-intr.loadPlugins("tavily",config.plugins.tavily);
+intr.loadCommands("./commands.json");
+intr.loadPlugins("weather",config.plugins.weather);
 intr.loadPlugins("calendar",config.plugins.calendar);
 intr.loadPlugins("gmail",config.plugins.gmail);
-intr.loadPlugins("weather",config.plugins.weather);
-
+intr.loadPlugins("tavily",config.plugins.tavily);
+//order matters here btw. cuz for matching scores, first plugin will be considered.
 
 async function a(){
-console.log(await intr.query("what is the weather like today?"));
+console.log(await intr.query("when is the first formula one race in my calendar?"));
 }
 a();

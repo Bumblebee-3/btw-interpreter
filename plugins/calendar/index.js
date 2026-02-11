@@ -27,29 +27,22 @@ class GoogleCalendar {
     }
     async getUpcomingEvents(query) {
         const now = new Date();
-
         let timeMin = now;
         let timeMax = null;
-
-        // default: next 365 days
         let days = 365;
 
         if (typeof query === "string") {
             const q = query.toLowerCase();
 
-            // ---------- 1️⃣ relative days: "next 7 days", "in 14 days"
             let match = q.match(/\b(\d+)\s*days?\b/);
             if (match) {
                 days = Number(match[1]);
             }
 
-            // ---------- 2️⃣ relative months: "next 2 months", "in 3 months"
             match = q.match(/\b(\d+)\s*months?\b/);
             if (match) {
                 days = Number(match[1]) * 30;
             }
-
-            // ---------- 3️⃣ absolute month: "in august"
             const monthMap = {
                 january: 0, february: 1, march: 2, april: 3,
                 may: 4, june: 5, july: 6, august: 7,
@@ -63,8 +56,6 @@ class GoogleCalendar {
             if (match) {
                 const monthIndex = monthMap[match[1]];
                 let year = now.getFullYear();
-
-                // if month already passed → next year
                 if (monthIndex < now.getMonth()) {
                     year += 1;
                 }
@@ -74,7 +65,6 @@ class GoogleCalendar {
             }
         }
 
-        // ---------- fallback relative window
         if (!timeMax) {
             if (!Number.isFinite(days) || days <= 0) {
                 days = 365;
@@ -83,19 +73,29 @@ class GoogleCalendar {
             timeMax = new Date(now);
             timeMax.setDate(timeMax.getDate() + days);
         }
+        const calendarList = await this.calendar.calendarList.list();
+        const eventRequests = calendarList.data.items.map(cal => 
+            this.calendar.events.list({
+                calendarId: cal.id,
+                timeMin: timeMin.toISOString(),
+                timeMax: timeMax.toISOString(),
+                singleEvents: true,
+                orderBy: "startTime"
+            }).catch(() => ({ data: { items: [] } }))
+        );
 
-        const res = await this.calendar.events.list({
-            calendarId: "primary",
-            timeMin: timeMin.toISOString(),
-            timeMax: timeMax.toISOString(),
-            singleEvents: true,
-            orderBy: "startTime"
+        const responses = await Promise.all(eventRequests);
+
+        const allEvents = responses.flatMap((res, index) => {
+            const calendarName = calendarList.data.items[index].summary;
+            return (res.data.items || []).map(event => ({
+                name: event.summary || "No Title",
+                start: event.start.dateTime || event.start.date,
+                calendar: calendarName
+            }));
         });
+        return allEvents.sort((a, b) => new Date(a.start) - new Date(b.start));
 
-        return res.data.items.map(e => ({
-            summary: e.summary,
-            start: e.start.dateTime || e.start.date
-        }));
     }
 
 
