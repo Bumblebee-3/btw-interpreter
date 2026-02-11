@@ -1,5 +1,5 @@
 const path = require("path");
-const {plugin_answer} = require("./groq.js");
+const {answer,plugin_answer} = require("./groq.js");
 
 function checkPlugins(query, obj) {
     const inp = query.toLowerCase();
@@ -56,6 +56,9 @@ async function handlePlugin(plugin,func,query,gapi){
     const pluginInstance = loadPlugin(plugin, plugin.params);
     const result = await callPluginFunction(pluginInstance,func,query);
     if (func.requires_LLM==true){
+        if(func.custom_prompt==true){
+            return await answer(query,obj.groq_api,true);
+        }
         return await plugin_answer(query,gapi,func,result);
     }
     return result;

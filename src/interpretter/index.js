@@ -11,7 +11,7 @@ async function handle(query,obj){
         if(p.isPlugin==true){
             return await handlePlugin(p.plugin,p.function,query,obj.groq_api);
         } else {
-            return await answer(query,obj.groq_api);
+            return await answer(query,obj.groq_api,false);
         }
     }
 }

@@ -3,3 +3,5 @@ plugins/credentials.json
 plugins/token.json
 .env
 package-lock.json
+a.sh
+a.txt

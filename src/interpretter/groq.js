@@ -1,5 +1,7 @@
-async function answer(query,gapi) {
-    const prompt = "You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences. Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read. Here is the query: "+query;
+async function answer(query,gapi,cp=false) {
+    var prompt;
+    if (cp == false) prompt = "You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences. Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read. Here is the query: "+query;
+    else prompt = query;
     const res = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
         {

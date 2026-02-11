@@ -11,6 +11,7 @@
       "async": true,
       "requires_LLM": true,
       "output_format":[],
+      "custom_prompt":false,
       "keywords": [
         "calendar",
         "schedule",
