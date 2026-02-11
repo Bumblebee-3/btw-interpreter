@@ -3,6 +3,7 @@ const { promisify } = require("node:util");
 const { spawn } = require("node:child_process");
 const execFileAsync = promisify(execFile);
 
+
 function toRegex(inp) {//need to find a better way to do ts 
   let pattern = inp.toLowerCase();
   pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -29,7 +30,7 @@ function intentScore(example, match, text) {
 }
 /*Dont question this logic lmao*/
 function checkCommands(input, obj) {
-  if(obj.command = {} ){
+  if(!obj.command.location ){
     return {
       isCommand: false,
       cmd: null
@@ -91,21 +92,16 @@ async function confirm(title, body) {
   }
 }
 
+
 function runShellCommand(command) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      shell: true,
-      stdio: "inherit",
-    });
-
-    child.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Command exited with code ${code}`));
-    });
-
-    child.on("error", reject);
+  const child = spawn(command, {
+    shell: true,
+    detached: true,
+    stdio: "ignore"
   });
+  child.unref();
 }
+
 
 /*
 {
