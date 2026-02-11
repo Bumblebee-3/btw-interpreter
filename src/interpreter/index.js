@@ -4,8 +4,8 @@ const {answer} = require("./groq.js");
 async function handle(query,obj){
     let c = checkCommands(query,obj);
     if(c.isCommand==true){
-        await handleCommand(c.cmd);
-        return "Command was handled appropriately.";
+        
+        return await handleCommand(c.cmd);
     } else {
         let p= checkPlugins(query,obj);
         if(p.isPlugin==true){

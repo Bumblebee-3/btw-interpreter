@@ -207,7 +207,8 @@
       "apply updates",
       "upgrade system",
       "system upgrade",
-      "update packages"
+      "update packages",
+      "update my"
     ],
     "dangerous": true,
     "details":{

@@ -54,7 +54,7 @@ class Tavily {
                         query: input,
                         answer: response.answer || response.results?.[0]?.content || "Tavily failed."
                     };
-                    resolve(result);
+                    resolve(result.answer);
                 } catch (err) {
                     console.warn("curl error:", err);
                     const result = {
@@ -62,7 +62,7 @@ class Tavily {
                         answer: "Tavily failed.",
                         error: err
                     };
-                    resolve(result);
+                    resolve(result.answer);
                 }
             });
         });

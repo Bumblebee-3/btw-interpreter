@@ -132,21 +132,20 @@ function resolveCommand(template, parameters) {
 }
 
 async function handleCommand(cmd) {
-  console.log(cmd);
   if (cmd.command.dangerous === true) {
     const approved = await confirm(cmd.command.details.title,cmd.command.details.description);
     if (!approved) {
-      return console.log("User denied running command.");
+      return ("User denied running command.");
     }
   }
 
   try {
     let command = resolveCommand(cmd.command.shell_command_template , cmd.parameters);
-    console.log(command)
     await runShellCommand(command);
-    console.log("Command executed successfully.");
+    return ("Command executed successfully.");
   } catch (err) {
     console.error("Command failed:", err.message);
+    return "Error occurred!";
   }
 }
 
