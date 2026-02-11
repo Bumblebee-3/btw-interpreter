@@ -24,11 +24,11 @@ const {Interpreter} = require("./src/index.js")
 
 var interpreter = new Interpreter({ groq_api_key:"API KEY HERE" });//get one at console.groq.com
 ```
-1. Normal GROQ AI chatbot:
+### 1. Normal GROQ AI chatbot:
 ```javascript
 console.log(await interpreter.query("What is the integral of 2x^2 ?"));
 ```
-2. Giving it access to System Commands
+### 2. Giving it access to System Commands
 ```javascript
 interpreter.loadCommands("./path/to/commands/json/file");
 ```
@@ -59,11 +59,11 @@ How to write your own `commands.json` file:
 }
 ```
 
-### Please note: dangerous commands use zenity to show confirmation dialogs. if you want to use something else, you can edit `/src/scripts/notify.sh`
+#### Please note: dangerous commands use zenity to show confirmation dialogs. if you want to use something else, you can edit `/src/scripts/notify.sh`
 
-⚠️ WARNING: System commands execute directly in the shell. Only load trusted command files and plugins.
+#### ⚠️ WARNING: System commands execute directly in the shell. Only load trusted command files and plugins.
 
-3. Loading Plugins
+### 3. Loading Plugins
 List of inbuilt plugins
 - `calendar` (uses google calendar. You will require a `credentials.json` file (google cloud console) and `token.json` file. Token.json can be generated via generate_token.js script.You will also need to install googleapis : `npm i googleapis`)
 - `gmail` (uses Gmail. Same requirements as calendar)
@@ -72,9 +72,9 @@ List of inbuilt plugins
 
 The data passed from plugins is automatically given to GROQ as a system prompt.
 
-### Interested in building your own plugin? Read [plugins.md](./plugins.md).
+#### Interested in building your own plugin? Read [plugins.md](./plugins.md).
 
-4. Enabling and using RAG
+### 4. Enabling and using RAG
 
 ```shell
 npm install @google/generative-ai
@@ -85,32 +85,31 @@ npm install @lancedb/lancedb
 interpreter.loadDB("GEMINI_API_KEY");//required for creating embeddings!
 let db = interpreter.db;
 ```
-- Create a table
+### Create a table
 ```js
 await db.createTable("memory");
 await db.createTable("birthdays");
 ```
-- Add data to table.
+### Add data to table.
 ```js
   await db.addToTable("memory", "User likes Arch Linux.");
   await db.addToTable("memory", "User's system specifications are:Dell Inspiron 15 3567 which has cpu: core i3 6006u,gpu: Intel hd 520 graphics and ram: 16 gb ddr4.");
   await db.addToTable("birthdays", "A's birthday is on 12th August.");
   await db.addToTable("birthdays", "B's birthday is on 28th March.");
 ```
-- Query a specific table
+### Query a specific table
 ```js
   const results = await db.queryTable("birthdays", "Whose birthday is in august?");
   console.log(results);
 ```
-- This data can also be retrieved using 
+### This data can also be retrieved using 
 ```js
 console.log(await interpreter.query("What is the integral of 2x^2 ?"));
 ```
-- Delete a table
+### Delete a table
 ```js
 await db.deleteTable("birthdays");
 ```
-
 
 
 
