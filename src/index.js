@@ -27,6 +27,10 @@ class Interpretter {
 
     loadPlugins(location,params){
         try {
+            if(location=="calendar"){location=__dirname+"/plugins/calendar/plugindata.json";location=location.replace("/src/","/")}
+            else if(location=="gmail"){location=__dirname+"/plugins/gmail/plugindata.json";location=location.replace("/src/","/")}
+            else if (location=="tavily"){location=__dirname+"/plugins/tavily/plugindata.json";location=location.replace("/src/","/")}
+            else if(location=="weather"){location=__dirname+"/plugins/weather/plugindata.json";location=location.replace("/src/","/")}
             const resolvedPath = path.resolve(location);
             const dir = path.dirname(resolvedPath);
             if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
@@ -42,11 +46,13 @@ class Interpretter {
             if (!fs.existsSync(path.resolve(dir+"/"+obj.data.entrypoint)) || !fs.statSync(path.resolve(dir+"/"+obj.data.entrypoint)).isFile()) {
                 throw new Error(`Misconfigured plugin data file: ${resolvedPath}. Invalid entrypoint (${path.resolve(dir+"/"+obj.data.entrypoint)})`);
             }
-            if (obj.data.plugin_params.length>0 && obj.data.plugin_params!=null){
-                for(let i=0;i<obj.data.plugin_params.length;i++){
-                    if(params[obj.data.plugin_params[i]]==null) throw new Error(`Mismatch between plugin parameters and BTWD parameters! ${obj.data.plugin_params[i]}`);
+            if (obj.data.plugin_params && Array.isArray(obj.data.plugin_params)) {
+                for (let i = 0; i < obj.data.plugin_params.length; i++) {
+                    const paramName = obj.data.plugin_params[i];
+                    if (!(paramName in params)) throw new Error(`Mismatch: Missing required plugin parameter: ${paramName}`);
                 }
             }
+
             if(obj.data.functions.length==0 || obj.data.functions==null){
                 throw new Error(`Misconfigured plugin data file: ${resolvedPath}. There must be atleast one function that the interpretter can call!`);
             }

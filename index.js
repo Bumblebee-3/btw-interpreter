@@ -7,23 +7,23 @@ var intr = new Interpretter({
 });
 intr.loadCommands("./commands.json")
 
-intr.loadPlugins("./plugins/tavily/plugindata.json",{
+intr.loadPlugins("tavily",{
     "search_depth":"basic",
     "country":"india",
     "tavily_api_key":process.env.tapi
 });
 
-intr.loadPlugins("./plugins/calendar/plugindata.json",{
+intr.loadPlugins("calendar",{
     credentials_path:"./plugins/credentials.json",
     token_path:"./plugins/token.json"
 });
 
-intr.loadPlugins("./plugins/gmail/plugindata.json",{
+intr.loadPlugins("gmail",{
     credentials_path:"./plugins/credentials.json",
     token_path:"./plugins/token.json"
 });
 
-intr.loadPlugins("./plugins/weather/plugindata.json",{
+intr.loadPlugins("weather",{
     weather_api_key:process.env.wapi,
     default_location:"mumbai"
 });
