@@ -1,5 +1,3 @@
-const { exec } = require('child_process');
-
 class Tavily {
     constructor(search_depth, country, tavily_api_key) {
         this.search_depth = search_depth;
@@ -7,66 +5,41 @@ class Tavily {
         this.tavily_api_key = tavily_api_key;
     }
 
-    searchOnline(input) {
-        return new Promise((resolve, reject) => {
-            /*const payload = JSON.stringify({
+    async searchOnline(input) {
+        try {
+            const payload = {
                 query: input,
-                auto_parameters: false,
-                search_depth: this.search_depth,
-                chunks_per_source: 3,
-                max_results: 1,
-                time_range: null,
-                start_date: null,
-                end_date: null,
                 include_answer: "basic",
-                include_raw_content: false,
-                include_images: false,
-                include_image_descriptions: false,
-                include_favicon: false,
-                include_domains: [],
-                exclude_domains: [],
-                country: this.country,
-                include_usage: false
-            });*/
+                search_depth: "advanced"
+            };
 
-            const payload = JSON.stringify({
-    query: input,
-    include_answer: "basic",
-    search_depth: "advanced"
-});
-
-
-            const cmd = `curl --silent --request POST \
-                --url https://api.tavily.com/search \
-                --header 'Authorization: Bearer ${this.tavily_api_key}' \
-                --header 'Content-Type: application/json' \
-                --data '${payload}'
-            `;
-
-            exec(cmd, (error, stdout, stderr) => {
-                if (stderr) console.warn("curl stderr:", stderr);
-                if (error) console.warn("curl error:", stderr);
-
-                try {
-                    const response = JSON.parse(stdout);
-                    //console.log(response)
-                    const result = {
-                        query: input,
-                        answer: response.answer || response.results?.[0]?.content || "Tavily failed."
-                    };
-                    resolve(result.answer);
-                } catch (err) {
-                    console.warn("curl error:", err);
-                    const result = {
-                        query: input,
-                        answer: "Tavily failed.",
-                        error: err
-                    };
-                    resolve(result.answer);
-                }
+            const response = await fetch("https://api.tavily.com/search", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${this.tavily_api_key}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(payload)
             });
-        });
+
+            if (!response.ok) {
+                console.warn("HTTP error:", response.status);
+                return "Tavily failed.";
+            }
+
+            const data = await response.json();
+
+            return (
+                data.answer ||
+                data.results?.[0]?.content ||
+                "Tavily failed."
+            );
+
+        } catch (err) {
+            console.warn("Fetch error:", err);
+            return "Tavily failed.";
+        }
     }
 }
 
-module.exports = Tavily
+module.exports = Tavily;

@@ -1,5 +1,8 @@
 {
     "groq_api_key":"",
+    "rag":{
+        "gemini_api_key":""
+    },
     "plugins":{
         "tavily":{
             "search_depth":"basic",

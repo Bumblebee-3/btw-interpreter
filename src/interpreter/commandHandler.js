@@ -29,6 +29,12 @@ function intentScore(example, match, text) {
 }
 /*Dont question this logic lmao*/
 function checkCommands(input, obj) {
+  if(obj.command = {} ){
+    return {
+      isCommand: false,
+      cmd: null
+    };
+  }
   const commands = require(obj.command.location);
   const text = input.toLowerCase().replace(/[%]/g, " percent").replace(/\s+/g, " ").trim();
 

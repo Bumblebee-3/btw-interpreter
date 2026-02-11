@@ -15,10 +15,11 @@ intr.loadPlugins("weather",config.plugins.weather);
 intr.loadPlugins("calendar",config.plugins.calendar);
 intr.loadPlugins("gmail",config.plugins.gmail);
 intr.loadPlugins("tavily",config.plugins.tavily);
-intr.loadDB(process.env.GEMINI_API_KEY)
+intr.loadDB(config.rag.gemini_api_key||process.env.GEMINI_API_KEY)
 //order matters here btw. cuz for matching scores, first plugin will be considered.
 
 async function a(){
-console.log(await intr.query("what is my prefered OS?"));
+    let db = intr.db;
+    console.log(await intr.query("whos birthday is in august from my calendar??"));
 }
 a();
