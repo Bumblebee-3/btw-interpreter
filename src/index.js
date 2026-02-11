@@ -2,12 +2,15 @@ let fs = require("fs");
 let path = require("path");
 const queryHandler = require("./interpreter/index.js");
 
+
+
 class Interpreter {
     constructor(args){
         this.command = {};
         this.plugins = [];
         if(!args.groq_api_key) throw new Error("Please provide groq api key!");
         this.groq_api = args.groq_api_key;
+        this.db = {};
     }
 
     loadCommands(location) {
@@ -27,8 +30,8 @@ class Interpreter {
 
     loadPlugins(location,params){
         try {
-            if(location=="calendar"){location=__dirname+"/plugins/calendar/plugindata.json";location=location.replace("/src/","/")}
-            else if(location=="gmail"){location=__dirname+"/plugins/gmail/plugindata.json";location=location.replace("/src/","/")}
+            if(location=="calendar"){location=__dirname+"/plugins/calendar/plugindata.json";location=location.replace("/src/","/");try{const { google } = require("googleapis");}catch(err){console.log("Please install googleapis via npm.");process.exit(0);}}
+            else if(location=="gmail"){location=__dirname+"/plugins/gmail/plugindata.json";location=location.replace("/src/","/");try{const { google } = require("googleapis");}catch(err){console.log("Please install googleapis via npm.");process.exit(0);}}
             else if (location=="tavily"){location=__dirname+"/plugins/tavily/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="weather"){location=__dirname+"/plugins/weather/plugindata.json";location=location.replace("/src/","/")}
             const resolvedPath = path.resolve(location);
@@ -77,6 +80,15 @@ class Interpreter {
     async query(input){
         return await queryHandler.handle(input,this);
     }
+    loadDB(api_key,dbPath="lancedb"){
+        const LanceDBWrapper = require("./rag/LanceDBWrapper.js");
+        const db = new LanceDBWrapper({
+            apiKey: api_key,
+            dbPath: dbPath
+        });
+        this.db = db;
+    }
+
 }
 
 module.exports = {

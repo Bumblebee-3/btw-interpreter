@@ -5,3 +5,4 @@ plugins/token.json
 package-lock.json
 a.sh
 a.txt
+/lancedb/

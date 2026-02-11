@@ -15,9 +15,10 @@ intr.loadPlugins("weather",config.plugins.weather);
 intr.loadPlugins("calendar",config.plugins.calendar);
 intr.loadPlugins("gmail",config.plugins.gmail);
 intr.loadPlugins("tavily",config.plugins.tavily);
+intr.loadDB(process.env.GEMINI_API_KEY)
 //order matters here btw. cuz for matching scores, first plugin will be considered.
 
 async function a(){
-console.log(await intr.query("what is the latest stock price of nvidia?"));
+console.log(await intr.query("what is my prefered OS?"));
 }
 a();

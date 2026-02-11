@@ -10,7 +10,11 @@
     "test": "node test.js"
   },
   "dependencies": {
-    "dotenv": "^17.2.4",
+    "dotenv": "^17.2.4"
+  },
+  "devDependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@lancedb/lancedb": "^0.26.2",
     "googleapis": "^171.4.0"
   }
 }
