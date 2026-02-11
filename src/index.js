@@ -1,8 +1,8 @@
 let fs = require("fs");
 let path = require("path");
-const queryHandler = require("./interpretter/index.js");
+const queryHandler = require("./interpreter/index.js");
 
-class Interpretter {
+class Interpreter {
     constructor(args){
         this.command = {};
         this.plugins = [];
@@ -54,7 +54,7 @@ class Interpretter {
             }
 
             if(obj.data.functions.length==0 || obj.data.functions==null){
-                throw new Error(`Misconfigured plugin data file: ${resolvedPath}. There must be atleast one function that the interpretter can call!`);
+                throw new Error(`Misconfigured plugin data file: ${resolvedPath}. There must be atleast one function that the interpreter can call!`);
             }
             for(let i=0;i<obj.data.functions.length;i++){
                 if (!obj.data.functions[i].name) throw new Error(`Misconfigured plugin data file: ${resolvedPath}. Missing requires_LLM in function [${i}]!`);
@@ -80,5 +80,5 @@ class Interpretter {
 }
 
 module.exports = {
-    Interpretter
+    Interpreter
 }

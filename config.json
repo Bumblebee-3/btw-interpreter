@@ -1,0 +1,22 @@
+{
+    "groq_api_key":"",
+    "plugins":{
+        "tavily":{
+            "search_depth":"basic",
+            "country":"india",
+            "tavily_api_key":""
+        },
+        "calendar":{
+            "credentials_path":"./plugins/credentials.json",
+            "token_path":"./plugins/token.json"
+        },
+        "gmail":{
+            "credentials_path":"./plugins/credentials.json",
+            "token_path":"./plugins/token.json"
+        },
+        "weather":{
+            "weather_api_key":"",
+            "default_location":"mumbai"
+        }
+    }
+}
