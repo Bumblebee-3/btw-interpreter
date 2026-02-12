@@ -1,12 +1,13 @@
 const fs = require("fs");
 const { google } = require("googleapis");
+const { originalLog } = require("../../index.js");
+
 
 function decodeBase64(data) {
     if (!data) return "";
     const fixed = data.replace(/-/g, "+").replace(/_/g, "/");
     return Buffer.from(fixed, "base64").toString("utf-8");
 }
-
 
 function stripHtml(html) {
     if (!html) return "";
@@ -20,7 +21,9 @@ function stripHtml(html) {
 
 function extractBody(payload) {
     if (!payload) return "";
+
     if (payload.body?.data) return decodeBase64(payload.body.data);
+
     if (!payload.parts) return "";
 
     for (const part of payload.parts) {
@@ -28,6 +31,7 @@ function extractBody(payload) {
             return decodeBase64(part.body.data);
         }
     }
+
     for (const part of payload.parts) {
         if (part.mimeType === "text/html" && part.body?.data) {
             return decodeBase64(part.body.data);
@@ -37,11 +41,52 @@ function extractBody(payload) {
     return "";
 }
 
+function buildGmailQuery(intent) {
+    let q = "";
+
+    if (!intent.include_spam_trash) {
+        q += "in:inbox ";
+    }
+
+    if (intent.sender) {
+        const cleaned = intent.sender.replace(/"/g, "");
+        q += `from:${cleaned} `;
+    }
+
+    if (intent.subject) {
+        q += `subject:"${intent.subject.replace(/"/g, "")}" `;
+    }
+
+    if (intent.keywords && Array.isArray(intent.keywords)) {
+        for (const word of intent.keywords) {
+            q += `"${word.replace(/"/g, "")}" `;
+        }
+    }
+
+    if (intent.has_attachment) {
+        q += "has:attachment ";
+    }
+
+    if (intent.filename) {
+        q += `filename:${intent.filename.replace(/"/g, "")} `;
+    }
+
+    if (intent.unread) {
+        q += "is:unread ";
+    }
+
+    if (intent.timeframe_days) {
+        q += `newer_than:${intent.timeframe_days}d `;
+    }
+
+    return q.trim();
+}
+
+
 class Gmail {
-    constructor(credentials_path, token_path) {
-        this.credentials = JSON.parse(
-            fs.readFileSync(credentials_path)
-        );
+    constructor(credentials_path, token_path, obj) {
+        this.credentials = JSON.parse(fs.readFileSync(credentials_path));
+        this.obj = obj;
 
         const { client_secret, client_id, redirect_uris } =
             this.credentials.installed;
@@ -61,109 +106,98 @@ class Gmail {
         });
     }
 
-    async getEmails(query) {
-        let maxResults = 25;
-        let searchQuery = "";
-        const DEFAULT_SCOPE = "in:inbox category:primary";
 
-        if (!query || typeof query !== "string") {
-            searchQuery = DEFAULT_SCOPE;
-            maxResults = 1;
-        } else {
-            const trimmed = query.trim();
+    async parseIntent(query) {
+        const prompt = `
+You are a Gmail query compiler.
 
-            const gmailOperatorRegex =
-                /\b(from:|to:|subject:|in:|category:|is:|newer_than:|older_than:|has:|label:)/i;
+Return ONLY valid JSON.
+No explanation.
+No markdown.
+No extra text.
 
-            const isGmailSyntax = gmailOperatorRegex.test(trimmed);
+Schema:
+{
+  "sender": string | null,
+  "subject": string | null,
+  "keywords": string[] | null,
+  "has_attachment": boolean,
+  "filename": string | null,
+  "unread": boolean,
+  "timeframe_days": number | null,
+  "limit": number,
+  "include_spam_trash": boolean
+}
 
-            if (isGmailSyntax) {
-                searchQuery = trimmed;
-            } else {
-                const q = trimmed.toLowerCase();
-                searchQuery = DEFAULT_SCOPE + " ";
+Rules:
+- "latest" or "most recent" => limit = 1
+- If a number of emails is requested, use that number
+- If nothing specified, limit = 5
+- Extract important keywords if no sender specified
+- If user mentions attachment, set has_attachment = true
+- timeframe_days must be a number (1, 7, 30) or null
+- If user mentions spam or trash, set include_spam_trash = true
 
-                if (q.includes("latest") || q.includes("last")||q.includes("most recent")||q.includes("newest")) {
-                    maxResults = 1;
-                }
+User request:
+"${query}"
+`;
 
-                const numberMatch = q.match(/\b(\d+)\s+emails?\b/);
-                if (numberMatch) {
-                    maxResults = Math.min(Number(numberMatch[1]), 100);
-                }
+        let raw = await this.obj.customQuery(prompt);
 
-                if (q.includes("unread")) {
-                    searchQuery += "is:unread ";
-                }
+        try {
+            const jsonMatch = raw.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) throw new Error("No JSON found");
 
-                const fromMatch = q.match(/\bfrom\s+([a-z0-9@._-]+)\b/);
-                if (fromMatch) {
-                    searchQuery += `from:${fromMatch[1]} `;
-                }
+            return JSON.parse(jsonMatch[0]);
+        } catch (err) {
 
-                if (q.includes("today")) {
-                    searchQuery += "newer_than:1d ";
-                }
-
-                if (q.includes("this week")) {
-                    searchQuery += "newer_than:7d ";
-                }
-
-                const handled =
-                    q.includes("latest") ||
-                    q.includes("last") ||
-                    q.includes("unread") ||
-                    q.includes("today") ||
-                    q.includes("this week") ||
-                    fromMatch ||
-                    numberMatch;
-
-                if (!handled) {
-                    const cleaned = trimmed
-                        .replace(/can you find/i, "")
-                        .replace(/find/i, "")
-                        .replace(/the email/i, "")
-                        .replace(/regarding/i, "")
-                        .replace(/about/i, "")
-                        .replace(/with subject/i, "")
-                        .replace(/subject/i, "")
-                        .replace(/email/i, "")
-                        .replace(/search/i, "")
-                        .replace(/search for/i, "")
-                        .replace(/\?/g, "")
-                        .replace(/\./i,"")
-                        .trim();
-                    const {originalLog}=require("../../index.js");
-                    //originalLog("Cleaned subject search query:", cleaned);
-                    searchQuery += `${cleaned} `;
-                }
-            }
+            return {
+                sender: null,
+                subject: null,
+                keywords: null,
+                has_attachment: false,
+                filename: null,
+                unread: false,
+                timeframe_days: null,
+                limit: 5,
+                include_spam_trash: false
+            };
         }
+    }
 
-        let messages = [];
-        let pageToken = null;
+    async getEmails(query) {
+        const intent = await this.parseIntent(query);
 
-        while (messages.length < maxResults) {
-            const res = await this.gmail.users.messages.list({
+        const searchQuery = buildGmailQuery(intent);
+
+        const maxResults = intent.limit || 5;
+
+        let res = await this.gmail.users.messages.list({
+            userId: "me",
+            q: searchQuery,
+            maxResults,
+            includeSpamTrash: intent.include_spam_trash || false
+        });
+
+        let messages = res.data.messages || [];
+
+        if (messages.length === 0 && searchQuery.includes("in:inbox")) {
+            const relaxedQuery = searchQuery.replace("in:inbox", "").trim();
+
+            const retry = await this.gmail.users.messages.list({
                 userId: "me",
-                q: searchQuery.trim(),
-                maxResults: Math.min(50, maxResults - messages.length),
-                pageToken
+                q: relaxedQuery,
+                maxResults,
+                includeSpamTrash: intent.include_spam_trash || false
             });
 
-            if (!res.data.messages) break;
-
-            messages.push(...res.data.messages);
-            pageToken = res.data.nextPageToken;
-
-            if (!pageToken) break;
+            messages = retry.data.messages || [];
         }
 
         const emails = [];
-        const MAX_EMAILS_FOR_LLM = 5;
         const MAX_BODY_CHARS = 800;
 
-        for (const msg of messages.slice(0, MAX_EMAILS_FOR_LLM)) {
+        for (const msg of messages) {
             const full = await this.gmail.users.messages.get({
                 userId: "me",
                 id: msg.id,
@@ -174,7 +208,9 @@ class Gmail {
             const headers = payload.headers || [];
 
             const getHeader = name =>
-                headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+                headers.find(
+                    h => h.name.toLowerCase() === name.toLowerCase()
+                )?.value || "";
 
             let body = extractBody(payload);
             body = stripHtml(body).slice(0, MAX_BODY_CHARS);
@@ -192,11 +228,11 @@ class Gmail {
 
         return {
             count: emails.length,
-            query: searchQuery.trim(),
+            query: searchQuery,
+            intent,
             emails
         };
     }
-
 }
 
 module.exports = Gmail;

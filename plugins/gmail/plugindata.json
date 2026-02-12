@@ -2,7 +2,7 @@
   "name": "Gmail",
   "description": "Read Gmail emails",
   "entrypoint": "index.js",
-  "plugin_params": ["credentials_path", "token_path"],
+  "plugin_params": ["credentials_path", "token_path","obj"],
 
   "functions": [
     {

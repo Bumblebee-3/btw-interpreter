@@ -2,7 +2,7 @@ let fs = require("fs");
 let path = require("path");
 const queryHandler = require("./interpreter/index.js");
 
-
+const {answer} = require("./interpreter/groq.js");
 
 class Interpreter {
     constructor(args){
@@ -89,6 +89,9 @@ class Interpreter {
         });
         this.db = db;
         this.table_config = table_config;
+    }
+    async customQuery(query){
+        return await answer(query,this.groq_api,true,this);
     }
 
 }

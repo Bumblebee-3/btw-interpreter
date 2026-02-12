@@ -19,7 +19,7 @@ var intr = new Interpreter({ groq_api_key:(config.groq_api_key || process.env.ga
 config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key==""||!config.plugins.tavily.tavily_api_key)?process.env.tapi:config.plugins.tavily.tavily_api_key;
 config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key==""||!config.plugins.weather.weather_api_key)?process.env.wapi:config.plugins.weather.weather_api_key;
 /*IM STOOPID*/
-
+config.plugins.gmail.obj = intr;
 intr.loadCommands(__dirname+"/commands.json");
 intr.loadPlugins("weather",config.plugins.weather);
 intr.loadPlugins("calendar",config.plugins.calendar);
