@@ -24,7 +24,11 @@ intr.loadPlugins("weather",config.plugins.weather);
 intr.loadPlugins("calendar",config.plugins.calendar);
 intr.loadPlugins("gmail",config.plugins.gmail);
 intr.loadPlugins("tavily",config.plugins.tavily);
-intr.loadDB(config.rag.gemini_api_key||process.env.GEMINI_API_KEY)
+intr.loadDB(config.rag.gemini_api_key||process.env.GEMINI_API_KEY,"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/lancedb/",{
+  "birthdays":1,
+  "documents":5,
+  "memory":5
+})
 //order matters here btw. cuz for matching scores, first plugin will be considered.
 
 

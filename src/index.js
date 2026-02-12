@@ -11,6 +11,7 @@ class Interpreter {
         if(!args.groq_api_key) throw new Error("Please provide groq api key!");
         this.groq_api = args.groq_api_key;
         this.db = {};
+        this.table_config = {};
     }
 
     loadCommands(location) {
@@ -80,13 +81,14 @@ class Interpreter {
     async query(input){
         return await queryHandler.handle(input,this);
     }
-    loadDB(api_key,dbPath="lancedb"){
+    loadDB(api_key,dbPath="lancedb",table_config){
         const LanceDBWrapper = require("./rag/LanceDBWrapper.js");
         const db = new LanceDBWrapper({
             apiKey: api_key,
             dbPath: dbPath
         });
         this.db = db;
+        this.table_config = table_config;
     }
 
 }

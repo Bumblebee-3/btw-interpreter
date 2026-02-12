@@ -23,14 +23,15 @@ async function answer(query,gapi,cp=false,obj) {
         const data = await res.json();
         return data.choices[0].message.content;
     } else {
-        let answer = await obj.db.searchDB(query,10);
+        let answer = await obj.db.searchDB(query,10,obj.table_config);
         let string = "\n";
         for(i in answer){
             string += `${answer[i].text} (similarity score: ${answer[i].similarity})\n`
         }
+        //console.log(string);
         const prompt =
             "You are Bumblebee, a helpful voice assistant. " +
-            "Answer concisely in 2-3 sentences. " +
+            "Answer concisely in 1-2 sentences. " +
             "Plain text only. No markdown. " +
             "Output will be used for TTS, so keep it clear and easy to read. " +
             "Use retrieved knowledge below, prioritizing higher similarity scores. " +

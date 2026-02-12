@@ -10,12 +10,12 @@
             "tavily_api_key":""
         },
         "calendar":{
-            "credentials_path":"./plugins/credentials.json",
-            "token_path":"./plugins/token.json"
+            "credentials_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/credentials.json",
+            "token_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/token.json"
         },
         "gmail":{
-            "credentials_path":"./plugins/credentials.json",
-            "token_path":"./plugins/token.json"
+            "credentials_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/credentials.json",
+            "token_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/token.json"
         },
         "weather":{
             "weather_api_key":"",

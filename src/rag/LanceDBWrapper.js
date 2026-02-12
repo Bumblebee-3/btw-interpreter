@@ -95,13 +95,16 @@ class LanceDBWrapper {
     console.log(`Table "${tableName}" deleted.`);
   }
 
-  async searchDB(question, max = 5) {
+  async searchDB(question, max = 5,table_config) {
     const db = this;
     const tables = await db.getAllTables();
     let allResults = [];
 
     for (const tableName of tables) {
-        const results = await db.queryTable(tableName, question, max);
+        //console.log(tableName+":"+table_config[tableName])
+        if(table_config[tableName]==null){table_config[tableName]=5}
+        if(table_config[tableName]==0) continue;
+        const results = await db.queryTable(tableName, question, table_config[tableName]);
         for (const result of results) {
           allResults.push({
             text: result.text,

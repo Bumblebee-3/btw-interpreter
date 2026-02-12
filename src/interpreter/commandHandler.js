@@ -81,8 +81,9 @@ function checkCommands(input, obj) {
 
 async function confirm(title, body) {
   try {
+    const path = __dirname.replace("/src/interpreter","/src")+"/scripts/notify.sh";
     await execFileAsync(
-      "./src/scripts/notify.sh",
+      path,
       [title, body],
       { timeout: 60000 }
     );
