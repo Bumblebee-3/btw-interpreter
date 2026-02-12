@@ -63,7 +63,7 @@ async function answer(query,gapi,cp=false,obj) {
 }
 
 
-async function plugin_answer(query,gapi,func,data) {
+async function plugin_answer(query,gapi,func,data,ctx) {
     const prompt = 
         `You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences.\n`+
         `Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read.\n`+
@@ -72,7 +72,9 @@ async function plugin_answer(query,gapi,func,data) {
         `Here is the function description that provides the data:\n` +
         `${JSON.stringify(func, null, 2)}\n` +
         `Here is the data:\n` +
-        `${JSON.stringify(data, null, 2)}`;
+        `${JSON.stringify(data, null, 2)}\n\n`+
+        `Please note: [IMPORTANT] If the user is asking for information about an email, provide the link to that email EXPlICITLY IN THE FORMAT(square brackets must engulf the link) "LINK:[https://mail.google.com/mail/u/0/?authuser=${(!ctx.email )?"0":ctx.email}#all/<THREAD_ID>]" at the end of the answer, where <THREAD_ID> is the threadId of the email. This is the only way to access the email, so if the user is asking about an email, you MUST provide this link.\n`+
+        `THE EMAIL MUST BE EASILY READABLE BY TTS AGENTS, SO DO NOT SEND UNNECESSARY DATA AND ANSWER WITHIN 1-2 SENTENCES. Do not send timestamps, only dates is good enough.`;
 
     //console.log(prompt);
     const res = await fetch(
@@ -84,17 +86,21 @@ async function plugin_answer(query,gapi,func,data) {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
+                model: "groq/compound",
                 messages: [
                     { role: "user", content: prompt }
                 ]
             })
         }
     );
-
+    const {originalLog}=require("../../index.js")
     const d = await res.json();
-    //console.log(d);
-    return d.choices[0].message.content;
+    try{
+        return d.choices[0].message.content;
+    } catch (error) {
+        //originalLog("Error in plugin_answer: " + d.error.message);
+        return d.error.message;
+    }
 }
 
 

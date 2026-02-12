@@ -1,7 +1,12 @@
 {
     "groq_api_key":"",
     "rag":{
-        "gemini_api_key":""
+        "location":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/lancedb/",
+        "table_limit":{
+            "birthdays":5,
+            "documents":5,
+            "memory":5
+        }
     },
     "plugins":{
         "tavily":{
@@ -16,6 +21,11 @@
         "gmail":{
             "credentials_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/credentials.json",
             "token_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/token.json"
+        },
+        "gmail-rag":{
+            "credentials_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/credentials.json",
+            "token_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/token.json",
+            "dbname":"gmail_rag"
         },
         "weather":{
             "weather_api_key":"",

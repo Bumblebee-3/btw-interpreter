@@ -9,7 +9,7 @@ async function handle(query,obj){
     } else {
         let p= checkPlugins(query,obj);
         if(p.isPlugin==true){
-            return await handlePlugin(p.plugin,p.function,query,obj.groq_api);
+            return await handlePlugin(p.plugin,p.function,query,obj.groq_api,obj);
         } else {
             return await answer(query,obj.groq_api,false,obj);
         }

@@ -77,12 +77,11 @@ The data passed from plugins is automatically given to GROQ as a system prompt.
 ### 4. Enabling and using RAG
 
 ```shell
-npm install @google/generative-ai
 npm install @lancedb/lancedb
 ```
 
 ```javascript
-interpreter.loadDB("GEMINI_API_KEY");//required for creating embeddings!
+interpreter.loadDB("folder of db","{table limits}");//required for creating embeddings!
 let db = interpreter.db;
 ```
 ### Create a table

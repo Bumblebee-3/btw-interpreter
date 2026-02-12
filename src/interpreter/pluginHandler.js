@@ -52,14 +52,14 @@ async function callPluginFunction(instance, funcd, input) {
     return await instance[method](input);
 }
 
-async function handlePlugin(plugin,func,query,gapi){
+async function handlePlugin(plugin,func,query,gapi,ctx){
     const pluginInstance = loadPlugin(plugin, plugin.params);
     const result = await callPluginFunction(pluginInstance,func,query);
     if (func.requires_LLM==true){
         if(func.custom_prompt==true){
             return await answer(query,obj.groq_api,true);
         }
-        return await plugin_answer(query,gapi,func,result);
+        return await plugin_answer(query,gapi,func,result,ctx);
     }
     return result;
 }

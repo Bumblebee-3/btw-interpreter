@@ -29,7 +29,8 @@ class Interpreter {
         }
     }
 
-    loadPlugins(location,params){
+    loadPlugins(location,params,email="0"){
+        this.email=email;
         try {
             if(location=="calendar"){location=__dirname+"/plugins/calendar/plugindata.json";location=location.replace("/src/","/");try{const { google } = require("googleapis");}catch(err){console.log("Please install googleapis via npm.");process.exit(0);}}
             else if(location=="gmail"){location=__dirname+"/plugins/gmail/plugindata.json";location=location.replace("/src/","/");try{const { google } = require("googleapis");}catch(err){console.log("Please install googleapis via npm.");process.exit(0);}}
@@ -81,10 +82,9 @@ class Interpreter {
     async query(input){
         return await queryHandler.handle(input,this);
     }
-    loadDB(api_key,dbPath="lancedb",table_config){
+    loadDB(dbPath="lancedb",table_config){
         const LanceDBWrapper = require("./rag/LanceDBWrapper.js");
         const db = new LanceDBWrapper({
-            apiKey: api_key,
             dbPath: dbPath
         });
         this.db = db;

@@ -30,9 +30,10 @@ class Tavily {
             const data = await response.json();
 
             return (
-                data.answer ||
+            (data.answer ||
                 data.results?.[0]?.content ||
                 "Tavily failed."
+            )+"LINK:[https://www.google.com/search?q="+encodeURIComponent(input)+"]"
             );
 
         } catch (err) {

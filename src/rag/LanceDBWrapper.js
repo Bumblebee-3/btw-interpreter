@@ -1,37 +1,46 @@
 const lancedb = require("@lancedb/lancedb");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const path = require("path");
 const crypto = require("crypto");
+const { pipeline } = require("@xenova/transformers");
 
 class LanceDBWrapper {
   constructor(options = {}) {
     this.dbPath = options.dbPath || path.join(__dirname, "lancedb");
-    this.apiKey = options.apiKey || process.env.GEMINI_API_KEY;
-
-    if (!this.apiKey) throw new Error("GEMINI_API_KEY missing");
-
-    this.genAI = new GoogleGenerativeAI(this.apiKey);
-    this.embeddingModel = this.genAI.getGenerativeModel({model: "gemini-embedding-001"});
     this.db = null;
-    this.embeddingDimension = null;
+    this.embeddingDimension = 384; // MiniLM dimension
+    this.embedder = null;
   }
 
   async init() {
-    if (!this.db) this.db = await lancedb.connect(this.dbPath);
+    if (!this.db) {
+      this.db = await lancedb.connect(this.dbPath);
+    }
 
-    if (!this.embeddingDimension) {
-      const test = await this.generateEmbedding("dimension check");
-      this.embeddingDimension = test.length;
+    if (!this.embedder) {
+      console.log("Loading MiniLM model (first time may take ~10s)...");
+      this.embedder = await pipeline(
+        "feature-extraction",
+        "Xenova/all-MiniLM-L6-v2"
+      );
+      console.log("Embedding model loaded.");
     }
   }
+
+  
   async getAllTables() {
     await this.init();
     return await this.db.tableNames();
   }
 
   async generateEmbedding(text) {
-    const result = await this.embeddingModel.embedContent(text);
-    return result.embedding.values;
+    await this.init();
+
+    const output = await this.embedder(text, {
+      pooling: "mean",
+      normalize: true,
+    });
+
+    return Array.from(output.data);
   }
 
   async createTable(tableName) {
@@ -81,11 +90,10 @@ class LanceDBWrapper {
       .limit(limit)
       .toArray();
 
-    // Return human readable results
-    return results.map(r => ({
+    return results.map((r) => ({
       id: r.id,
       text: r.text,
-      similarity: ((1 - r._distance) * 100).toFixed(2) + "%"
+      similarity: ((1 - r._distance) * 100).toFixed(2) + "%",
     }));
   }
 
@@ -95,26 +103,30 @@ class LanceDBWrapper {
     console.log(`Table "${tableName}" deleted.`);
   }
 
-  async searchDB(question, max = 5,table_config) {
-    const db = this;
-    const tables = await db.getAllTables();
+  async searchDB(question, max = 5, table_config = {}) {
+    const tables = await this.getAllTables();
     let allResults = [];
 
     for (const tableName of tables) {
-        //console.log(tableName+":"+table_config[tableName])
-        if(table_config[tableName]==null){table_config[tableName]=5}
-        if(table_config[tableName]==0) continue;
-        const results = await db.queryTable(tableName, question, table_config[tableName]);
-        for (const result of results) {
-          allResults.push({
-            text: result.text,
-            similarity: parseFloat(result.similarity.replace("%", ""))
-          });
-        }
+      if (table_config[tableName] == null) table_config[tableName] = 5;
+      if (table_config[tableName] === 0) continue;
+
+      const results = await this.queryTable(
+        tableName,
+        question,
+        table_config[tableName]
+      );
+
+      for (const result of results) {
+        allResults.push({
+          text: result.text,
+          similarity: parseFloat(result.similarity.replace("%", "")),
+        });
       }
-      allResults.sort((a, b) => b.similarity - a.similarity);
-      const topResults = allResults.slice(0, max);
-      return(topResults);
+    }
+
+    allResults.sort((a, b) => b.similarity - a.similarity);
+    return allResults.slice(0, max);
   }
 }
 
