@@ -79,6 +79,27 @@ function selectCandidateFromInput(input, candidates) {
         }
     }
 
+    const ordinalMap = {
+        one: 1,
+        first: 1,
+        two: 2,
+        second: 2,
+        three: 3,
+        third: 3,
+        four: 4,
+        fourth: 4,
+        five: 5,
+        fifth: 5
+    };
+
+    const normalizedWords = normalizeText(raw).replace(/^option\s+/, "").trim();
+    if (Object.prototype.hasOwnProperty.call(ordinalMap, normalizedWords)) {
+        const idx = ordinalMap[normalizedWords] - 1;
+        if (idx >= 0 && idx < candidates.length) {
+            return candidates[idx];
+        }
+    }
+
     if (isEmail(raw)) {
         const email = raw.toLowerCase();
         const matched = candidates.find(c => c.email.toLowerCase() === email);
@@ -201,6 +222,36 @@ function buildGmailQuery(intent) {
     return q.trim();
 }
 
+function parseEmailDraftIntentFromInput(input) {
+    const raw = String(input || "").trim();
+    if (!raw) return null;
+
+    // Case 1: explicit message body present.
+    const fullPattern = /(?:write|send|compose)\s+(?:an?\s+)?email\s+to\s+(.+?)\s+(?:regarding|about|subject\s*:?\s*)\s+(.+?)\s+(?:saying|body\s*:?\s*)\s+([\s\S]+)$/i;
+    const fullMatch = raw.match(fullPattern);
+    if (fullMatch) {
+        const recipient = String(fullMatch[1] || "").trim();
+        const subject = String(fullMatch[2] || "").trim().replace(/[.!?]+$/g, "");
+        const body = String(fullMatch[3] || "").trim();
+        if (recipient && subject) {
+            return { recipient, subject, body: body || null };
+        }
+    }
+
+    // Case 2: only recipient + subject-like phrase.
+    const subjectPattern = /(?:write|send|compose)\s+(?:an?\s+)?email\s+to\s+(.+?)\s+(?:regarding|about|subject\s*:?\s*)\s+([\s\S]+)$/i;
+    const subjectMatch = raw.match(subjectPattern);
+    if (subjectMatch) {
+        const recipient = String(subjectMatch[1] || "").trim();
+        const subject = String(subjectMatch[2] || "").trim().replace(/[.!?]+$/g, "");
+        if (recipient && subject) {
+            return { recipient, subject, body: null };
+        }
+    }
+
+    return null;
+}
+
 
 class Gmail {
     constructor(credentials_path, token_path, obj) {
@@ -228,6 +279,32 @@ class Gmail {
             version: "v1",
             auth: this.oAuth2Client
         });
+    }
+
+    async prefillWorkflowParams({ workflow, input, params }) {
+        if (workflow !== "send_email") {
+            return {};
+        }
+
+        const parsed = parseEmailDraftIntentFromInput(input || "");
+        if (!parsed) {
+            return {};
+        }
+
+        const next = {};
+        if ((!params?.recipient || !String(params.recipient).trim()) && parsed.recipient) {
+            next.recipient = parsed.recipient;
+        }
+        if ((!params?.subject || !String(params.subject).trim()) && parsed.subject) {
+            next.subject = parsed.subject;
+        }
+        // Intentionally do NOT force-fill body from vague statements like
+        // "regarding ..." so the assistant still asks for explicit body when needed.
+        if ((!params?.body || !String(params.body).trim()) && parsed.body) {
+            next.body = parsed.body;
+        }
+
+        return next;
     }
 
 

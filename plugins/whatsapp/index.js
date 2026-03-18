@@ -168,6 +168,27 @@ function selectCandidateFromInput(input, candidates) {
     }
   }
 
+  const ordinalMap = {
+    one: 1,
+    first: 1,
+    two: 2,
+    second: 2,
+    three: 3,
+    third: 3,
+    four: 4,
+    fourth: 4,
+    five: 5,
+    fifth: 5
+  };
+
+  const normalizedWords = normalizeText(raw).replace(/^option\s+/, "").trim();
+  if (Object.prototype.hasOwnProperty.call(ordinalMap, normalizedWords)) {
+    const idx = ordinalMap[normalizedWords] - 1;
+    if (idx >= 0 && idx < candidates.length) {
+      return candidates[idx];
+    }
+  }
+
   const directJid = candidates.find(c => c.jid.toLowerCase() === raw.toLowerCase());
   if (directJid) return directJid;
 
