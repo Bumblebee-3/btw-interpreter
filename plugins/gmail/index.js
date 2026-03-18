@@ -1,6 +1,126 @@
 const fs = require("fs");
 const { google } = require("googleapis");
 
+function isEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function normalizeText(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function toTokens(value) {
+    const normalized = normalizeText(value);
+    if (!normalized) return [];
+    return normalized.split(" ").filter(Boolean);
+}
+
+function parseHeaderAddresses(headerValue) {
+    const out = [];
+    const value = String(headerValue || "");
+    if (!value.trim()) return out;
+
+    const segments = value.split(",").map(s => s.trim()).filter(Boolean);
+    for (const seg of segments) {
+        const angle = seg.match(/^(.*)<([^>]+)>$/);
+        if (angle) {
+            const name = angle[1].replace(/^"|"$/g, "").trim();
+            const email = angle[2].trim();
+            if (isEmail(email)) out.push({ name, email });
+            continue;
+        }
+
+        const singleEmail = seg.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+        if (singleEmail) {
+            out.push({ name: "", email: singleEmail[0].trim() });
+        }
+    }
+
+    return out;
+}
+
+function dedupeCandidates(candidates) {
+    const seen = new Set();
+    const out = [];
+
+    for (const candidate of candidates) {
+        const email = String(candidate.email || "").trim().toLowerCase();
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+        out.push({
+            name: candidate.name || "Unknown",
+            email,
+            score: Number(candidate.score || 0),
+            source: candidate.source || "unknown"
+        });
+    }
+
+    return out;
+}
+
+function formatCandidateOptions(candidates) {
+    const sliced = candidates.slice(0, 5);
+    return sliced.map((item, idx) => `${idx + 1}. ${item.name} <${item.email}>`).join("; ");
+}
+
+function selectCandidateFromInput(input, candidates) {
+    const raw = String(input || "").trim();
+    if (!raw) return null;
+
+    const numeric = raw.match(/^(?:option\s*)?(\d{1,2})$/i);
+    if (numeric) {
+        const idx = Number(numeric[1]) - 1;
+        if (idx >= 0 && idx < candidates.length) {
+            return candidates[idx];
+        }
+    }
+
+    if (isEmail(raw)) {
+        const email = raw.toLowerCase();
+        const matched = candidates.find(c => c.email.toLowerCase() === email);
+        if (matched) return matched;
+    }
+
+    const normalizedRaw = normalizeText(raw);
+    const matchedByName = candidates.find(c => normalizeText(c.name) === normalizedRaw);
+    if (matchedByName) return matchedByName;
+
+    return null;
+}
+
+function recipientMatchScore(query, name, email) {
+    const q = normalizeText(query);
+    const n = normalizeText(name);
+    const e = String(email || "").toLowerCase();
+    const local = e.split("@")[0] || "";
+    if (!q) return 0;
+
+    let score = 0;
+    if (n === q) score = Math.max(score, 7);
+    if (n && n.includes(q)) score = Math.max(score, 5);
+    if (e === q) score = Math.max(score, 8);
+    if (local === q.replace(/\s+/g, "")) score = Math.max(score, 6);
+    if (local.includes(q.replace(/\s+/g, ""))) score = Math.max(score, 4);
+
+    const qt = toTokens(q);
+    const nt = new Set(toTokens(n));
+    if (qt.length > 0 && nt.size > 0) {
+        let hits = 0;
+        for (const token of qt) {
+            if (nt.has(token)) hits++;
+        }
+
+        const ratio = hits / qt.length;
+        if (ratio >= 0.5) score = Math.max(score, 3 + ratio * 2);
+    }
+
+    return score;
+}
+
 
 function decodeBase64(data) {
     if (!data) return "";
@@ -100,6 +220,11 @@ class Gmail {
         this.oAuth2Client.setCredentials(token);
 
         this.gmail = google.gmail({
+            version: "v1",
+            auth: this.oAuth2Client
+        });
+
+        this.people = google.people({
             version: "v1",
             auth: this.oAuth2Client
         });
@@ -234,14 +359,56 @@ User request:
     }
 
     async sendEmailWorkflow(params) {
-        const recipient = String(params.recipient || "").trim();
+        const recipientInput = String(params.recipient || "").trim();
         const subject = String(params.subject || "").trim();
         const body = String(params.body || "").trim();
         const cc = params.cc ? String(params.cc).trim() : "";
+        const candidatePool = Array.isArray(params._recipientCandidates) ? params._recipientCandidates : [];
 
-        if (!recipient || !subject || !body) {
-            return "Missing required parameters to send the email.";
+        if (!recipientInput || !subject || !body) {
+            return {
+                status: "needs_input",
+                message: "Missing required parameters to send the email. Please provide recipient, subject, and body.",
+                field: !recipientInput ? "recipient" : (!subject ? "subject" : "body")
+            };
         }
+
+        let recipientResolution;
+        if (candidatePool.length > 0) {
+            const selected = selectCandidateFromInput(recipientInput, candidatePool);
+            if (!selected) {
+                return {
+                    status: "needs_input",
+                    field: "recipient",
+                    message: `Please choose recipient by option number or exact email. Options: ${formatCandidateOptions(candidatePool)}`
+                };
+            }
+
+            recipientResolution = {
+                ok: true,
+                email: selected.email,
+                name: selected.name,
+                source: selected.source || "selection"
+            };
+        } else {
+            recipientResolution = await this.resolveRecipient(recipientInput);
+        }
+
+        if (!recipientResolution.ok) {
+            if (Array.isArray(recipientResolution.candidates) && recipientResolution.candidates.length > 0) {
+                params._recipientCandidates = recipientResolution.candidates;
+            }
+
+            return {
+                status: "needs_input",
+                message: recipientResolution.message,
+                field: "recipient"
+            };
+        }
+
+        delete params._recipientCandidates;
+
+        const recipient = recipientResolution.email;
 
         const lines = [
             `To: ${recipient}`,
@@ -268,6 +435,10 @@ User request:
                 }
             });
 
+            if (recipientResolution.source === "contacts" || recipientResolution.source === "history") {
+                return `Email sent successfully to ${recipientResolution.name} <${recipient}>. Message id: ${sent.data.id}`;
+            }
+
             return `Email sent successfully. Message id: ${sent.data.id}`;
         } catch (err) {
             const details = String(err?.message || "");
@@ -277,6 +448,207 @@ User request:
             }
             return `Failed to send email: ${err.message}`;
         }
+    }
+
+    async resolveRecipient(recipientInput) {
+        const direct = String(recipientInput || "").trim();
+        if (!direct) {
+            return {
+                ok: false,
+                message: "Please provide a recipient name or email address."
+            };
+        }
+
+        if (isEmail(direct)) {
+            return {
+                ok: true,
+                email: direct,
+                source: "direct"
+            };
+        }
+
+        const query = direct.toLowerCase();
+        const matches = [];
+        let pageToken = undefined;
+
+        try {
+            const searched = await this.people.people.searchContacts({
+                query: direct,
+                readMask: "names,emailAddresses",
+                pageSize: 20
+            });
+
+            const searchedResults = searched?.data?.results || [];
+            for (const item of searchedResults) {
+                const person = item.person || {};
+                const name = person.names?.[0]?.displayName || "Unknown";
+                const emails = person.emailAddresses || [];
+
+                for (const emailObj of emails) {
+                    const email = String(emailObj.value || "").trim();
+                    if (!email) continue;
+
+                    const score = recipientMatchScore(query, name, email);
+                    if (score <= 0) continue;
+
+                    matches.push({ name, email, score, source: "contacts" });
+                }
+            }
+
+            do {
+                const res = await this.people.people.connections.list({
+                    resourceName: "people/me",
+                    pageSize: 500,
+                    pageToken,
+                    personFields: "names,emailAddresses"
+                });
+
+                const people = res.data.connections || [];
+                for (const person of people) {
+                    const names = person.names || [];
+                    const emails = person.emailAddresses || [];
+                    if (emails.length === 0) continue;
+
+                    const primaryName = names[0]?.displayName || "Unknown";
+
+                    for (const emailObj of emails) {
+                        const email = String(emailObj.value || "").trim();
+                        if (!email) continue;
+
+                        const score = recipientMatchScore(query, primaryName, email);
+                        if (score <= 0) continue;
+
+                        matches.push({
+                            name: primaryName,
+                            email,
+                            score,
+                            source: "contacts"
+                        });
+                    }
+                }
+
+                pageToken = res.data.nextPageToken;
+            } while (pageToken && matches.length < 10);
+        } catch (err) {
+            const details = String(err?.message || "");
+            const scopeError = details.includes("insufficient authentication scopes") || details.includes("insufficientPermissions");
+            if (scopeError) {
+                return {
+                    ok: false,
+                    message: "Recipient lookup failed: token is missing Google Contacts scope. Regenerate plugins/token.json and accept https://www.googleapis.com/auth/contacts.readonly."
+                };
+            }
+
+            return {
+                ok: false,
+                message: `Recipient lookup failed: ${details}`
+            };
+        }
+
+        if (matches.length === 0) {
+            const history = await this.findRecipientFromGmailHistory(direct);
+            if (history.ok) {
+                return history;
+            }
+
+            return {
+                ok: false,
+                message: `No contact found for \"${direct}\" in Google Contacts or recent Gmail headers. Please provide the full email address.`
+            };
+        }
+
+        const uniqueMatches = dedupeCandidates(matches);
+        uniqueMatches.sort((a, b) => b.score - a.score);
+        if (uniqueMatches.length === 0) {
+            return {
+                ok: false,
+                message: `No contact found for \"${direct}\" in Google Contacts or recent Gmail headers. Please provide the full email address.`
+            };
+        }
+
+        const highConfidence = uniqueMatches.filter(item => item.score >= 7);
+        if (highConfidence.length === 1 && uniqueMatches.length === 1 && highConfidence[0].source === "contacts") {
+            return {
+                ok: true,
+                email: highConfidence[0].email,
+                name: highConfidence[0].name,
+                source: "contacts"
+            };
+        }
+
+        const optionText = formatCandidateOptions(uniqueMatches);
+        return {
+            ok: false,
+            candidates: uniqueMatches.slice(0, 5),
+            message: `Multiple or fuzzy recipient matches for \"${direct}\". Choose one by number or provide exact email. Options: ${optionText}`
+        };
+    }
+
+    async findRecipientFromGmailHistory(queryText) {
+        const matches = [];
+
+        try {
+            const list = await this.gmail.users.messages.list({
+                userId: "me",
+                maxResults: 25
+            });
+
+            const messages = list.data.messages || [];
+            for (const msg of messages) {
+                const meta = await this.gmail.users.messages.get({
+                    userId: "me",
+                    id: msg.id,
+                    format: "metadata",
+                    metadataHeaders: ["From", "To", "Cc"]
+                });
+
+                const headers = meta?.data?.payload?.headers || [];
+                for (const header of headers) {
+                    const key = String(header.name || "").toLowerCase();
+                    if (key !== "from" && key !== "to" && key !== "cc") continue;
+
+                    const addresses = parseHeaderAddresses(header.value);
+                    for (const addr of addresses) {
+                        const score = recipientMatchScore(queryText, addr.name, addr.email);
+                        if (score <= 0) continue;
+                        matches.push({
+                            name: addr.name || "Unknown",
+                            email: addr.email,
+                            score,
+                            source: "history"
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            return {
+                ok: false,
+                message: `Recipient lookup in Gmail history failed: ${String(err?.message || err)}`
+            };
+        }
+
+        if (matches.length === 0) {
+            return {
+                ok: false,
+                message: "No match in Gmail history"
+            };
+        }
+
+        const uniqueMatches = dedupeCandidates(matches);
+        uniqueMatches.sort((a, b) => b.score - a.score);
+        if (uniqueMatches.length === 0) {
+            return {
+                ok: false,
+                message: "No match in Gmail history"
+            };
+        }
+
+        const optionText = formatCandidateOptions(uniqueMatches);
+        return {
+            ok: false,
+            candidates: uniqueMatches.slice(0, 5),
+            message: `I found possible recipients from Gmail history for \"${queryText}\". Choose one by number or provide exact email. Options: ${optionText}`
+        };
     }
 }
 

@@ -5,7 +5,8 @@ const { google } = require("googleapis");
 const SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send"
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/contacts.readonly"
 ];
 const CREDENTIALS_PATH = "credentials.json";
 const TOKEN_PATH = "token.json";

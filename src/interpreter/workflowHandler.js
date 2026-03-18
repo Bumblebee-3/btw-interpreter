@@ -34,12 +34,30 @@ function normalizeWorkflow(workflow) {
 
 function scoreWorkflowMatch(query, workflow) {
   const input = query.toLowerCase();
+  const inputTokens = new Set(input.split(/[^a-z0-9@._-]+/i).filter(Boolean));
   const keywords = Array.isArray(workflow.keywords) ? workflow.keywords : [];
 
   let score = 0;
   for (const keyword of keywords) {
-    if (input.includes(String(keyword).toLowerCase())) {
-      score++;
+    const key = String(keyword).toLowerCase().trim();
+    if (!key) continue;
+
+    if (input.includes(key)) {
+      score += 3;
+      continue;
+    }
+
+    const keyTokens = key.split(/[^a-z0-9@._-]+/i).filter(Boolean);
+    if (keyTokens.length === 0) continue;
+
+    let hits = 0;
+    for (const token of keyTokens) {
+      if (inputTokens.has(token)) hits++;
+    }
+
+    const ratio = hits / keyTokens.length;
+    if (ratio >= 0.66) {
+      score += ratio * 2;
     }
   }
 
@@ -142,7 +160,11 @@ function emailLike(value) {
 
 function applySingleMissingFallback(state, input, extractedValues) {
   const missing = getMissingRequired(state);
-  const hasExtractedAny = extractedValues && Object.keys(extractedValues).length > 0;
+  const hasExtractedAny = extractedValues && Object.values(extractedValues).some(value => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string") return value.trim() !== "";
+    return true;
+  });
   if (missing.length !== 1 || hasExtractedAny) return;
 
   const param = missing[0];
@@ -239,6 +261,33 @@ async function executeWorkflow(state, obj, userInputForContext) {
   });
 }
 
+function stringifyResult(result) {
+  if (typeof result === "string") return result;
+  if (result === null || result === undefined) return "Workflow completed.";
+  if (typeof result?.message === "string") return result.message;
+  return JSON.stringify(result);
+}
+
+function handleExecutionResult(state, obj, workflowResult) {
+  if (workflowResult && typeof workflowResult === "object" && workflowResult.status === "needs_input") {
+    const field = workflowResult.field;
+    if (field && Object.prototype.hasOwnProperty.call(state.params, field)) {
+      delete state.params[field];
+    }
+
+    return {
+      handled: true,
+      response: stringifyResult(workflowResult)
+    };
+  }
+
+  obj.workflowState = null;
+  return {
+    handled: true,
+    response: stringifyResult(workflowResult)
+  };
+}
+
 async function continueActiveWorkflow(input, obj) {
   const state = obj.workflowState;
   const extracted = await extractParamsWithLLM(input, state, obj);
@@ -263,14 +312,7 @@ async function continueActiveWorkflow(input, obj) {
   }
 
   const workflowResult = await executeWorkflow(state, obj, input);
-  obj.workflowState = null;
-
-  return {
-    handled: true,
-    response: typeof workflowResult === "string"
-      ? workflowResult
-      : JSON.stringify(workflowResult)
-  };
+  return handleExecutionResult(state, obj, workflowResult);
 }
 
 async function startNewWorkflow(match, input, obj) {
@@ -298,14 +340,7 @@ async function startNewWorkflow(match, input, obj) {
   }
 
   const workflowResult = await executeWorkflow(state, obj, input);
-  obj.workflowState = null;
-
-  return {
-    handled: true,
-    response: typeof workflowResult === "string"
-      ? workflowResult
-      : JSON.stringify(workflowResult)
-  };
+  return handleExecutionResult(state, obj, workflowResult);
 }
 
 async function handleWorkflowInput(input, obj) {

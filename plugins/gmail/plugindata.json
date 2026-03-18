@@ -37,18 +37,29 @@
       "name": "send_email",
       "description": "Collect email details and send an email from the user's Gmail account",
       "keywords": [
+        "send mail",
+        "send a mail",
+        "send an email to",
+        "send mail to",
+        "email to",
+        "mail to",
         "send email",
         "send an email",
         "email john",
         "mail john",
         "compose email",
-        "write an email"
+        "write an email",
+        "write mail",
+        "compose mail",
+        "send email",
+        "send an email",
+        "send mail"
       ],
       "required_params": [
         {
           "name": "recipient",
-          "description": "Please provide the recipient email address.",
-          "type": "email"
+          "description": "Please provide recipient name or email address.",
+          "type": "string"
         },
         {
           "name": "subject",

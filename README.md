@@ -71,7 +71,9 @@ List of inbuilt plugins
 - `tavily` (Gives the user Web Scraping features for live data, news etc. You will need an API key though.)
 - `weather` (Weather updates. Requires an API key )
 
-If you want Gmail action workflows like sending emails, ensure your OAuth token includes `https://www.googleapis.com/auth/gmail.send`. If your token is old, regenerate `plugins/token.json` using `plugins/generate_token.js`.
+If you want Gmail action workflows like sending emails, ensure your OAuth token includes `https://www.googleapis.com/auth/gmail.send`.
+If you want to address recipients by contact name (for example, "send mail to John"), also include `https://www.googleapis.com/auth/contacts.readonly`.
+If your token is old, regenerate `plugins/token.json` using `plugins/generate_token.js`.
 
 The data passed from plugins is automatically given to GROQ as a system prompt.
 
