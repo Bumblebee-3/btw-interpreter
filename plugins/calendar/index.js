@@ -1,6 +1,5 @@
 const fs = require("fs");
 const { google } = require("googleapis");
-const { originalLog } = require("../../index.js");
 
 class GoogleCalendar {
     constructor(credentials_path, token_path, obj) {

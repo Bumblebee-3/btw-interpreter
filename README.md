@@ -4,6 +4,7 @@
 ## Features
 - System commands: run system commands like setting screen brightness, locking, shutting down, setting volume, updating packages etc.
 - Plugins: supports community made plugins to give GROQ as much information as needed (from gmail/calendar/weather api/web search via tavily etc.) to answer your questions accurately.
+- Stateful plugin workflows: plugins can declare action workflows (for example send email, create event) with required/optional parameters collected across conversation turns.
 - RAG: inbuilt RAG capabilities using LanceDB and Gemini embedding models.
 
 ## Things you can ask it to do (as of now)
@@ -70,7 +71,15 @@ List of inbuilt plugins
 - `tavily` (Gives the user Web Scraping features for live data, news etc. You will need an API key though.)
 - `weather` (Weather updates. Requires an API key )
 
+If you want Gmail action workflows like sending emails, ensure your OAuth token includes `https://www.googleapis.com/auth/gmail.send`. If your token is old, regenerate `plugins/token.json` using `plugins/generate_token.js`.
+
 The data passed from plugins is automatically given to GROQ as a system prompt.
+
+Plugins can also declare actionable workflows in `plugindata.json` via a `workflows` array:
+- Workflow matching is keyword-based.
+- Required parameters are collected progressively over multiple user turns.
+- Already provided parameters are reused.
+- When all required parameters are available, the workflow executes automatically.
 
 #### Interested in building your own plugin? Read [plugins.md](./plugins.md).
 

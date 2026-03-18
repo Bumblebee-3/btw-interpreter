@@ -1,7 +1,13 @@
 const {checkCommands , handleCommand} = require("./commandHandler.js");
 const {checkPlugins , handlePlugin} = require("./pluginHandler.js");
+const {handleWorkflowInput} = require("./workflowHandler.js");
 const {answer} = require("./groq.js");
 async function handle(query,obj){
+    const workflowResult = await handleWorkflowInput(query, obj);
+    if (workflowResult.handled) {
+        return workflowResult.response;
+    }
+
     let c = checkCommands(query,obj);
     if(c.isCommand==true){
         

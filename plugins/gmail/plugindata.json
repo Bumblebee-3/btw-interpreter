@@ -31,5 +31,44 @@
       ],
       "requires": ["$INPUT"]
     }
+  ],
+  "workflows": [
+    {
+      "name": "send_email",
+      "description": "Collect email details and send an email from the user's Gmail account",
+      "keywords": [
+        "send email",
+        "send an email",
+        "email john",
+        "mail john",
+        "compose email",
+        "write an email"
+      ],
+      "required_params": [
+        {
+          "name": "recipient",
+          "description": "Please provide the recipient email address.",
+          "type": "email"
+        },
+        {
+          "name": "subject",
+          "description": "Please provide the email subject.",
+          "type": "string"
+        },
+        {
+          "name": "body",
+          "description": "Please provide the email body.",
+          "type": "string"
+        }
+      ],
+      "optional_params": [
+        {
+          "name": "cc",
+          "description": "Optional: provide a CC email address.",
+          "type": "email"
+        }
+      ],
+      "execute": "sendEmailWorkflow"
+    }
   ]
 }

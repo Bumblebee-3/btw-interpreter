@@ -93,7 +93,6 @@ async function plugin_answer(query,gapi,func,data,ctx) {
             })
         }
     );
-    const {originalLog}=require("../../index.js")
     const d = await res.json();
     try{
         return d.choices[0].message.content;

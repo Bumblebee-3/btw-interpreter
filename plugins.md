@@ -226,3 +226,55 @@ Plugins are designed to:
 - Allow community-driven expansion
 
 Build responsibly.
+
+---
+
+# Action Workflows (Stateful)
+
+Plugins can also define stateful workflows for actions like sending emails, creating calendar events, posting to chat apps, etc.
+
+Workflows are declarative and live in `plugindata.json` under a top-level `workflows` array.
+
+Example:
+
+```json
+{
+    "workflows": [
+        {
+            "name": "send_email",
+            "description": "Collect details and send an email",
+            "keywords": ["send email", "compose email"],
+            "required_params": [
+                { "name": "recipient", "description": "Please provide recipient email.", "type": "email" },
+                { "name": "subject", "description": "Please provide subject.", "type": "string" },
+                { "name": "body", "description": "Please provide body.", "type": "string" }
+            ],
+            "optional_params": [
+                { "name": "cc", "description": "Optional CC email.", "type": "email" }
+            ],
+            "execute": "sendEmailWorkflow"
+        }
+    ]
+}
+```
+
+Rules:
+- `required_params` can be either strings or objects.
+- `optional_params` can be either strings or objects.
+- `execute` must be a method name implemented in your plugin class.
+- The interpreter will collect missing required params over multiple turns.
+- If a required param already exists in user input, it will not be asked again.
+- Once all required params are available, the interpreter executes the workflow automatically.
+- User can cancel active workflow by saying cancel/stop/abort.
+
+Execution signature in plugin class:
+
+```javascript
+async sendEmailWorkflow(params, context) {
+    // params contains required and optional values
+    // context contains runtime metadata
+    return "Done";
+}
+```
+
+This mechanism is plugin-agnostic, so the same pattern works for Gmail, Calendar, WhatsApp, Signal, Discord, and future integrations.

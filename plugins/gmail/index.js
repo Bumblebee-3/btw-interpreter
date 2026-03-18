@@ -1,6 +1,5 @@
 const fs = require("fs");
 const { google } = require("googleapis");
-const { originalLog } = require("../../index.js");
 
 
 function decodeBase64(data) {
@@ -232,6 +231,52 @@ User request:
             intent,
             emails
         };
+    }
+
+    async sendEmailWorkflow(params) {
+        const recipient = String(params.recipient || "").trim();
+        const subject = String(params.subject || "").trim();
+        const body = String(params.body || "").trim();
+        const cc = params.cc ? String(params.cc).trim() : "";
+
+        if (!recipient || !subject || !body) {
+            return "Missing required parameters to send the email.";
+        }
+
+        const lines = [
+            `To: ${recipient}`,
+            ...(cc ? [`Cc: ${cc}`] : []),
+            "Content-Type: text/plain; charset=\"UTF-8\"",
+            "MIME-Version: 1.0",
+            `Subject: ${subject}`,
+            "",
+            body
+        ];
+
+        const message = lines.join("\n");
+        const encodedMessage = Buffer.from(message)
+            .toString("base64")
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/g, "");
+
+        try {
+            const sent = await this.gmail.users.messages.send({
+                userId: "me",
+                requestBody: {
+                    raw: encodedMessage
+                }
+            });
+
+            return `Email sent successfully. Message id: ${sent.data.id}`;
+        } catch (err) {
+            const details = String(err?.message || "");
+            const scopeError = details.includes("insufficient authentication scopes") || details.includes("insufficientPermissions");
+            if (scopeError) {
+                return "Failed to send email: OAuth token is missing Gmail send scope. Regenerate plugins/token.json using plugins/generate_token.js after adding/accepting https://www.googleapis.com/auth/gmail.send.";
+            }
+            return `Failed to send email: ${err.message}`;
+        }
     }
 }
 

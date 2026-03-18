@@ -8,6 +8,7 @@ class Interpreter {
     constructor(args){
         this.command = {};
         this.plugins = [];
+        this.workflowState = null;
         if(!args.groq_api_key) throw new Error("Please provide groq api key!");
         this.groq_api = args.groq_api_key;
         this.db = {};

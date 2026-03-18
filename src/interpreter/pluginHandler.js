@@ -57,7 +57,7 @@ async function handlePlugin(plugin,func,query,gapi,ctx){
     const result = await callPluginFunction(pluginInstance,func,query);
     if (func.requires_LLM==true){
         if(func.custom_prompt==true){
-            return await answer(query,obj.groq_api,true);
+            return await answer(query,gapi,true,ctx);
         }
         return await plugin_answer(query,gapi,func,result,ctx);
     }
@@ -66,5 +66,7 @@ async function handlePlugin(plugin,func,query,gapi,ctx){
 
 module.exports = {
     checkPlugins,
-    handlePlugin
+    handlePlugin,
+    loadPlugin,
+    callPluginFunction
 }
