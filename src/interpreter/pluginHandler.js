@@ -6,6 +6,7 @@ function checkPlugins(query, obj) {
     const plugins = obj.plugins;
     let best = {
         score: 0,
+        specificity: 0,
         plugin: null,
         function: null,
         isPlugin:false
@@ -13,13 +14,21 @@ function checkPlugins(query, obj) {
     for (const plugin of plugins) {
         for (const func of plugin.data.functions) {
             let score = 0;
+            let specificity = 0;
             for (const keyword of func.keywords) {
-                if (inp.includes(keyword.toLowerCase())) {
-                    score++;
+                const normalizedKeyword = String(keyword || "").toLowerCase().trim();
+                if (!normalizedKeyword) continue;
+
+                if (inp.includes(normalizedKeyword)) {
+                    const tokenCount = normalizedKeyword.split(/\s+/).filter(Boolean).length;
+                    // Longer phrases are usually more intentional than single generic words.
+                    score += Math.max(1, tokenCount);
+                    specificity += normalizedKeyword.length;
                 }
             }
-            if (score > best.score) {
+            if (score > best.score || (score === best.score && specificity > best.specificity)) {
                 best.score = score;
+                best.specificity = specificity;
                 best.plugin = plugin;
                 best.function = func;
                 best.isPlugin = true;

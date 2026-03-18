@@ -70,10 +70,15 @@ List of inbuilt plugins
 - `gmail` (uses Gmail. Same requirements as calendar)
 - `tavily` (Gives the user Web Scraping features for live data, news etc. You will need an API key though.)
 - `weather` (Weather updates. Requires an API key )
+- `whatsapp` (uses Baileys. Supports sending WhatsApp messages via workflow and summarizing group chats; can also use Google Contacts to resolve phone numbers)
 
 If you want Gmail action workflows like sending emails, ensure your OAuth token includes `https://www.googleapis.com/auth/gmail.send`.
 If you want to address recipients by contact name (for example, "send mail to John"), also include `https://www.googleapis.com/auth/contacts.readonly`.
 If your token is old, regenerate `plugins/token.json` using `plugins/generate_token.js`.
+
+To enable WhatsApp plugin, set `plugins.whatsapp.enabled` to `true` in `config.json`.
+On first WhatsApp command, scan the QR in terminal to connect your WhatsApp account.
+If you want recipient name lookup from Google Contacts, keep contacts paths configured and ensure token has `https://www.googleapis.com/auth/contacts.readonly`.
 
 The data passed from plugins is automatically given to GROQ as a system prompt.
 

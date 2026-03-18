@@ -10,7 +10,9 @@
     "test": "node test.js"
   },
   "dependencies": {
-    "dotenv": "^17.2.4"
+    "baileys": "^7.0.0-rc.9",
+    "dotenv": "^17.2.4",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@lancedb/lancedb": "^0.26.2",

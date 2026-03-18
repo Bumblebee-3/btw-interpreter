@@ -1,0 +1,79 @@
+{
+  "name": "WhatsApp",
+  "description": "Send WhatsApp messages and summarize group conversations",
+  "entrypoint": "index.js",
+  "plugin_params": [
+    "auth_path",
+    "default_country_code",
+    "contacts_credentials_path",
+    "contacts_token_path",
+    "obj"
+  ],
+  "functions": [
+    {
+      "name": "summarizeGroupConversation",
+      "description": "Summarize recent messages from a WhatsApp group",
+      "async": true,
+      "requires_LLM": false,
+      "output_format": "Short summary of the requested group conversation.",
+      "keywords": [
+        "whatsapp group",
+        "group summary",
+        "summarize whatsapp",
+        "summarise whatsapp",
+        "summarise messages",
+        "summarise the latest messages",
+        "chat summary",
+        "what happened in group"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "name": "send_whatsapp_message",
+      "description": "Collect recipient and message, then send a WhatsApp message",
+      "keywords": [
+        "send whatsapp",
+        "send whatsapp message",
+        "send a message to",
+        "send message to",
+        "send a message in",
+        "send message in",
+        "send a message on",
+        "send message on",
+        "message on",
+        "send a message to group",
+        "message in group",
+        "message in",
+        "saying",
+        "message on whatsapp",
+        "whatsapp to",
+        "text on whatsapp",
+        "whatsapp message"
+      ],
+      "required_params": [
+        {
+          "name": "recipient",
+          "description": "Please provide recipient name or phone number.",
+          "type": "string"
+        },
+        {
+          "name": "message",
+          "description": "Please provide the WhatsApp message text.",
+          "type": "string"
+        }
+      ],
+      "optional_params": [
+        {
+          "name": "group",
+          "description": "Optional: provide a group name if this should be sent to a group.",
+          "type": "string"
+        }
+      ],
+      "execute": "sendMessageWorkflow"
+    }
+  ]
+}

@@ -37,6 +37,7 @@ class Interpreter {
             else if(location=="gmail"){location=__dirname+"/plugins/gmail/plugindata.json";location=location.replace("/src/","/");try{const { google } = require("googleapis");}catch(err){console.log("Please install googleapis via npm.");process.exit(0);}}
             else if (location=="tavily"){location=__dirname+"/plugins/tavily/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="weather"){location=__dirname+"/plugins/weather/plugindata.json";location=location.replace("/src/","/")}
+            else if(location=="whatsapp"){location=__dirname+"/plugins/whatsapp/plugindata.json";location=location.replace("/src/","/");try{const b = require("baileys");if(!b){throw new Error("missing");}}catch(err){console.log("Please install baileys via npm.");process.exit(0);}}
             const resolvedPath = path.resolve(location);
             const dir = path.dirname(resolvedPath);
             if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {

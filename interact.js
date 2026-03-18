@@ -23,6 +23,7 @@ const intr = new Interpreter({ groq_api_key: resolvedGroqKey });
 // attach interpreter to plugin params so plugins can call back to LLM
 config.plugins.gmail.obj = intr;
 config.plugins.calendar.obj = intr;
+if (config.plugins.whatsapp) config.plugins.whatsapp.obj = intr;
 config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key==""||!config.plugins.tavily.tavily_api_key)?process.env.tapi:config.plugins.tavily.tavily_api_key;
 
 
@@ -32,6 +33,9 @@ intr.loadPlugins("weather", config.plugins.weather);
 intr.loadPlugins("calendar", config.plugins.calendar);
 intr.loadPlugins("gmail", config.plugins.gmail, process.env.email);
 intr.loadPlugins("tavily", config.plugins.tavily);
+if (config.plugins.whatsapp && config.plugins.whatsapp.enabled === true) {
+  intr.loadPlugins("whatsapp", config.plugins.whatsapp);
+}
 intr.loadDB(config.rag.location, config.rag.table_limit);
 
 const readline = require("readline").createInterface({ input: process.stdin, output: process.stdout });

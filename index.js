@@ -21,11 +21,15 @@ config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key
 /*IM STOOPID*/
 config.plugins.gmail.obj = intr;
 config.plugins.calendar.obj = intr;
+if (config.plugins.whatsapp) config.plugins.whatsapp.obj = intr;
 intr.loadCommands(__dirname+"/commands.json");
 intr.loadPlugins("weather",config.plugins.weather);
 intr.loadPlugins("calendar",config.plugins.calendar);
 intr.loadPlugins("gmail",config.plugins.gmail,process.env.email);
 intr.loadPlugins("tavily",config.plugins.tavily);
+if (config.plugins.whatsapp && config.plugins.whatsapp.enabled === true) {
+  intr.loadPlugins("whatsapp",config.plugins.whatsapp);
+}
 intr.loadDB(config.rag.location,config.rag.table_limit);
 
 

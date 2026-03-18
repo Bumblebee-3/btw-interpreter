@@ -268,6 +268,29 @@ async function executeWorkflow(state, obj, userInputForContext) {
   });
 }
 
+async function applyPluginPrefill(state, obj, input) {
+  try {
+    const pluginInstance = loadPlugin(state.plugin, state.plugin.params);
+    if (typeof pluginInstance.prefillWorkflowParams !== "function") {
+      return;
+    }
+
+    const maybeValues = await pluginInstance.prefillWorkflowParams({
+      workflow: state.workflow.name,
+      input,
+      params: { ...state.params }
+    });
+
+    if (!maybeValues || typeof maybeValues !== "object") {
+      return;
+    }
+
+    mergeExtractedParams(state, maybeValues);
+  } catch (_) {
+    // Plugin prefill is optional and best-effort.
+  }
+}
+
 function stringifyResult(result) {
   if (typeof result === "string") return result;
   if (result === null || result === undefined) return "Workflow completed.";
@@ -309,6 +332,7 @@ async function continueActiveWorkflow(input, obj) {
 
   mergeExtractedParams(state, extracted.values);
   applySingleMissingFallback(state, input, extracted.values);
+  await applyPluginPrefill(state, obj, input);
 
   const missing = getMissingRequired(state);
   if (missing.length > 0) {
@@ -337,6 +361,7 @@ async function startNewWorkflow(match, input, obj) {
 
   mergeExtractedParams(state, extracted.values);
   applySingleMissingFallback(state, input, extracted.values);
+  await applyPluginPrefill(state, obj, input);
 
   const missing = getMissingRequired(state);
   if (missing.length > 0) {
@@ -356,6 +381,21 @@ async function handleWorkflowInput(input, obj) {
   }
 
   if (obj.workflowState) {
+    const activeState = obj.workflowState;
+    const activeScore = scoreWorkflowMatch(input, activeState.workflow);
+    const incomingMatch = findWorkflowMatch(input, obj);
+
+    const shouldSwitchWorkflow =
+      incomingMatch &&
+      incomingMatch.workflow &&
+      incomingMatch.workflow.name !== activeState.workflow.name &&
+      incomingMatch.score >= Math.max(3, activeScore + 1);
+
+    if (shouldSwitchWorkflow) {
+      obj.workflowState = null;
+      return await startNewWorkflow(incomingMatch, input, obj);
+    }
+
     return await continueActiveWorkflow(input, obj);
   }
 
