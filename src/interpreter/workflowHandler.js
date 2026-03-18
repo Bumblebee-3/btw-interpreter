@@ -192,6 +192,13 @@ async function extractParamsWithLLM(input, state, obj) {
     type: param.type
   }));
 
+  const visibleCurrentParams = {};
+  for (const param of allParams) {
+    if (state.params[param.name] !== undefined) {
+      visibleCurrentParams[param.name] = state.params[param.name];
+    }
+  }
+
   const missingHints = getMissingParamHints(state);
 
   const prompt =
@@ -218,7 +225,7 @@ Workflow name: ${state.workflow.name}
 Workflow description: ${state.workflow.description || "No description"}
 Allowed parameters: ${JSON.stringify(schema)}
 Missing required parameters now: ${JSON.stringify(missingHints)}
-Current collected params: ${JSON.stringify(state.params)}
+Current collected params: ${JSON.stringify(visibleCurrentParams)}
 Latest user message: ${JSON.stringify(input)}
 `;
 

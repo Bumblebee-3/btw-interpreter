@@ -358,7 +358,7 @@ User request:
         };
     }
 
-    async sendEmailWorkflow(params) {
+    async sendEmailWorkflow(params, context = {}) {
         const recipientInput = String(params.recipient || "").trim();
         const subject = String(params.subject || "").trim();
         const body = String(params.body || "").trim();
@@ -375,7 +375,10 @@ User request:
 
         let recipientResolution;
         if (candidatePool.length > 0) {
-            const selected = selectCandidateFromInput(recipientInput, candidatePool);
+            const selectionInput = String(context?.input || "").trim();
+            const selected =
+                selectCandidateFromInput(selectionInput, candidatePool) ||
+                selectCandidateFromInput(recipientInput, candidatePool);
             if (!selected) {
                 return {
                     status: "needs_input",
