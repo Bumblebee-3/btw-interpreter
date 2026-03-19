@@ -9,3 +9,5 @@ a.txt
 plugins/whatsapp/auth/
 plugins/whatsapp/message_cache.json
 plugins/reminder/reminders.json
+reminder.log
+whatsapp-sync.log
