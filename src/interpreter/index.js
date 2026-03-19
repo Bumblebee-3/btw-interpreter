@@ -1,11 +1,16 @@
 const {checkCommands , handleCommand} = require("./commandHandler.js");
-const {checkPlugins , handlePlugin} = require("./pluginHandler.js");
+const {checkPlugins , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
 const {handleWorkflowInput} = require("./workflowHandler.js");
 const {answer} = require("./groq.js");
 async function handle(query,obj){
     const workflowResult = await handleWorkflowInput(query, obj);
     if (workflowResult.handled) {
         return workflowResult.response;
+    }
+
+    const pluginFollowUp = await handlePluginFollowUp(query, obj);
+    if (pluginFollowUp.handled) {
+        return pluginFollowUp.response;
     }
 
     let c = checkCommands(query,obj);

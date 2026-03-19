@@ -9,7 +9,9 @@
   "scripts": {
     "test": "node test.js",
     "reminder:daemon": "node reminder_daemon.js",
-    "reminder:daemon:nohup": "nohup node reminder_daemon.js > reminder-daemon.log 2>&1 &"
+    "reminder:daemon:nohup": "nohup node reminder_daemon.js > reminder-daemon.log 2>&1 &",
+    "whatsapp:sync": "node whatsapp_sync_daemon.js",
+    "whatsapp:sync:nohup": "nohup node whatsapp_sync_daemon.js > whatsapp-sync.log 2>&1 &"
   },
   "dependencies": {
     "baileys": "^7.0.0-rc.9",

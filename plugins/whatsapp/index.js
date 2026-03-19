@@ -51,6 +51,12 @@ let singleton = {
   lastError: "",
   lastQr: "",
   authPath: "",
+  cachePath: "",
+  cacheLoaded: false,
+  saveTimer: null,
+  globalLastDigestAt: 0,
+  chatCheckpoints: new Map(),
+  pendingSelection: null,
   chats: new Map(),
   messages: new Map(),
   maxStoredMessages: 50,
@@ -66,6 +72,9 @@ function getBrowserIdentity() {
 
 function mapDisconnectError(statusCode, rawMessage) {
   const msg = String(rawMessage || "").toLowerCase();
+  if (statusCode === 440 || msg.includes("conflict")) {
+    return "WhatsApp session conflict (code 440): another client is using the same auth session.";
+  }
   if (statusCode === Number(DisconnectReason.loggedOut)) {
     return "WhatsApp session logged out. Delete plugins/whatsapp/auth and relink by scanning QR.";
   }
@@ -97,6 +106,184 @@ function scheduleReconnect(authPath) {
     singleton.reconnectTimer = null;
     ensureSocket(authPath).catch(() => {});
   }, delayMs);
+}
+
+function getCachePathFromAuthPath(authPath) {
+  const resolvedAuth = path.resolve(authPath || path.join(process.cwd(), "plugins", "whatsapp", "auth"));
+  return path.join(path.dirname(resolvedAuth), "message_cache.json");
+}
+
+function parseEpoch(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function persistCacheNow() {
+  if (!singleton.cachePath) return;
+  try {
+    fs.mkdirSync(path.dirname(singleton.cachePath), { recursive: true });
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      chats: Array.from(singleton.chats.entries()),
+      messages: Array.from(singleton.messages.entries()).map(([jid, items]) => [
+        jid,
+        Array.isArray(items) ? items.slice(-singleton.maxStoredMessages) : []
+      ]),
+      checkpoints: {
+        globalLastDigestAt: singleton.globalLastDigestAt,
+        perChat: Object.fromEntries(singleton.chatCheckpoints.entries())
+      }
+    };
+    fs.writeFileSync(singleton.cachePath, JSON.stringify(payload, null, 2));
+  } catch (_) {
+    // best effort persistence
+  }
+}
+
+function schedulePersistCache() {
+  if (!singleton.cachePath || singleton.saveTimer) return;
+  singleton.saveTimer = setTimeout(() => {
+    singleton.saveTimer = null;
+    persistCacheNow();
+  }, 750);
+}
+
+function loadPersistedCache(authPath) {
+  const cachePath = getCachePathFromAuthPath(authPath);
+  if (singleton.cacheLoaded && singleton.cachePath === cachePath) return;
+
+  singleton.cachePath = cachePath;
+  singleton.cacheLoaded = true;
+
+  try {
+    if (!fs.existsSync(cachePath)) return;
+    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+
+    const chatEntries = Array.isArray(parsed?.chats) ? parsed.chats : [];
+    const messageEntries = Array.isArray(parsed?.messages) ? parsed.messages : [];
+    const cp = parsed?.checkpoints || {};
+
+    singleton.chats = new Map(chatEntries.filter(e => Array.isArray(e) && e.length === 2));
+    singleton.messages = new Map(
+      messageEntries
+        .filter(e => Array.isArray(e) && e.length === 2)
+        .map(([jid, items]) => [jid, Array.isArray(items) ? items.slice(-singleton.maxStoredMessages) : []])
+    );
+
+    singleton.globalLastDigestAt = parseEpoch(cp.globalLastDigestAt, 0);
+    singleton.chatCheckpoints = new Map(
+      Object.entries(cp.perChat || {}).map(([jid, ts]) => [jid, parseEpoch(ts, 0)])
+    );
+
+    if (singleton.messages.size > 0) {
+      singleton.historyBootstrapDone = true;
+      console.log(`[WhatsApp] Loaded cache: ${singleton.chats.size} chats, ${singleton.messages.size} chats with messages.`);
+    }
+  } catch (_) {
+    // ignore malformed cache
+  }
+}
+
+function mergeSocketStoreMessages(targetJid = "") {
+  if (!singleton.socket?.messages || !(singleton.socket.messages instanceof Map)) {
+    return 0;
+  }
+
+  let loaded = 0;
+  for (const [chatId, list] of singleton.socket.messages.entries()) {
+    if (!chatId) continue;
+    if (targetJid && chatId !== targetJid) continue;
+    for (const proto of list || []) {
+      const msg = proto?.message
+        ? {
+            key: proto.key,
+            message: proto.message,
+            messageTimestamp: proto.messageTimestamp,
+            pushName: proto.pushName
+          }
+        : proto;
+      ingestMessageToHistory(msg);
+      loaded++;
+    }
+  }
+
+  if (loaded > 0) {
+    schedulePersistCache();
+  }
+  return loaded;
+}
+
+async function pullChatHistoryFromSocket(jid, limit = 80) {
+  if (!jid || !singleton.socket) return 0;
+
+  let loaded = mergeSocketStoreMessages(jid);
+  const socket = singleton.socket;
+
+  // Try known Baileys history APIs if socket store has no items for this chat.
+  const collect = payload => {
+    const items = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.messages)
+        ? payload.messages
+        : [];
+
+    for (const proto of items) {
+      const msg = proto?.message
+        ? {
+            key: proto.key,
+            message: proto.message,
+            messageTimestamp: proto.messageTimestamp,
+            pushName: proto.pushName
+          }
+        : proto;
+      ingestMessageToHistory(msg);
+      loaded++;
+    }
+  };
+
+  if (typeof socket.loadMessages === "function") {
+    try {
+      const res = await socket.loadMessages(jid, limit);
+      collect(res);
+    } catch (_) {
+      // ignore and try next API
+    }
+  }
+
+  if (typeof socket.fetchMessageHistory === "function") {
+    try {
+      const res = await socket.fetchMessageHistory(jid, limit);
+      collect(res);
+    } catch (_) {
+      // ignore and try alt signatures
+      try {
+        const res = await socket.fetchMessageHistory(jid, limit, undefined, undefined);
+        collect(res);
+      } catch (_) {
+        // no-op
+      }
+    }
+  }
+
+  if (loaded > 0) {
+    schedulePersistCache();
+  }
+  return loaded;
+}
+
+function getHistoryDiagnostics() {
+  const socket = singleton.socket;
+  const hasSocket = Boolean(socket);
+  const hasStore = Boolean(socket?.messages && socket.messages instanceof Map);
+  const storeChatsWithMessages = hasStore ? socket.messages.size : 0;
+
+  return {
+    hasSocket,
+    hasLoadMessages: typeof socket?.loadMessages === "function",
+    hasFetchMessageHistory: typeof socket?.fetchMessageHistory === "function",
+    hasSocketStore: hasStore,
+    storeChatsWithMessages
+  };
 }
 
 function normalizeText(value) {
@@ -138,6 +325,10 @@ function extractMessageText(message) {
   if (message.imageMessage?.caption) return message.imageMessage.caption;
   if (message.videoMessage?.caption) return message.videoMessage.caption;
   if (message.documentMessage?.caption) return message.documentMessage.caption;
+  if (message.viewOnceMessage?.message) return extractMessageText(message.viewOnceMessage.message);
+  if (message.ephemeralMessage?.message) return extractMessageText(message.ephemeralMessage.message);
+  if (message.stickerMessage) return "[sticker]";
+  if (message.audioMessage) return "[audio]";
   return "";
 }
 
@@ -145,13 +336,14 @@ function ingestMessageToHistory(msg) {
   const jid = msg?.key?.remoteJid;
   if (!jid) return;
 
-  const text = extractMessageText(msg.message);
+  const text = extractMessageText(msg.message || msg);
   if (!text || !String(text).trim()) return;
 
   const id = String(msg?.key?.id || "").trim();
-  const sender = msg.pushName || msg.key.participant || msg.key.remoteJid || "unknown";
-  const timestampRaw = msg.messageTimestamp;
+  const sender = msg.pushName || msg.key?.participant || msg.key?.remoteJid || "unknown";
+  const timestampRaw = msg.messageTimestamp || msg.timestamp;
   const timestamp = timestampRaw ? Number(timestampRaw) : Math.floor(Date.now() / 1000);
+  const fromMe = Boolean(msg?.key?.fromMe);
 
   if (!singleton.messages.has(jid)) {
     singleton.messages.set(jid, []);
@@ -166,13 +358,16 @@ function ingestMessageToHistory(msg) {
     id,
     sender,
     text,
-    timestamp
+    timestamp,
+    fromMe
   });
 
   bucket.sort((a, b) => a.timestamp - b.timestamp);
   if (bucket.length > singleton.maxStoredMessages) {
     bucket.splice(0, bucket.length - singleton.maxStoredMessages);
   }
+
+  schedulePersistCache();
 }
 
 function dedupeCandidates(candidates) {
@@ -246,6 +441,38 @@ function selectCandidateFromInput(input, candidates) {
   return null;
 }
 
+function selectIndexFromInput(input, maxLen) {
+  const raw = String(input || "").trim();
+  if (!raw) return -1;
+
+  const numeric = raw.match(/^(?:option\s*)?(\d{1,2})$/i);
+  if (numeric) {
+    const idx = Number(numeric[1]) - 1;
+    if (idx >= 0 && idx < maxLen) return idx;
+  }
+
+  const ordinalMap = {
+    one: 1,
+    first: 1,
+    two: 2,
+    second: 2,
+    three: 3,
+    third: 3,
+    four: 4,
+    fourth: 4,
+    five: 5,
+    fifth: 5
+  };
+
+  const normalized = normalizeText(raw).replace(/^option\s+/, "").trim();
+  if (Object.prototype.hasOwnProperty.call(ordinalMap, normalized)) {
+    const idx = ordinalMap[normalized] - 1;
+    if (idx >= 0 && idx < maxLen) return idx;
+  }
+
+  return -1;
+}
+
 function parseSendIntentFromInput(input) {
   const raw = String(input || "").trim();
   if (!raw) return null;
@@ -279,6 +506,27 @@ function parseSendIntentFromInput(input) {
   }
 
   return null;
+}
+
+function extractExplicitChatQuery(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+
+  const match = raw.match(/\b(?:in|from|of|for)\s+([^?.!,\n]+)/i);
+  if (!match) return "";
+
+  let value = String(match[1] || "").trim();
+  value = value.replace(/^the\s+/i, "").trim();
+  value = value
+    .replace(/\b(?:for\s+me|to\s+me)\b.*$/i, "")
+    .replace(/\b(?:please|pls|plz|right\s+now|today|now)\b.*$/i, "")
+    .trim();
+  value = value.replace(/\b(?:group|chat)\b\s*$/i, "").trim();
+  value = value.replace(/\s+/g, " ").trim();
+
+  if (!value) return "";
+  if (value.length > 80) return "";
+  return value;
 }
 
 function scoreTextMatch(query, label) {
@@ -338,6 +586,7 @@ async function ensureSocket(authPath) {
 
       const resolvedAuth = path.resolve(authPath || path.join(process.cwd(), "plugins", "whatsapp", "auth"));
       fs.mkdirSync(resolvedAuth, { recursive: true });
+      loadPersistedCache(resolvedAuth);
 
       const { state, saveCreds } = await useMultiFileAuthState(resolvedAuth);
       const { version } = await fetchLatestBaileysVersion();
@@ -369,12 +618,17 @@ async function ensureSocket(authPath) {
             console.log("[WhatsApp] Connected.");
             singleton.reconnectAttempts = 0;
             clearReconnectTimer();
+            const merged = mergeSocketStoreMessages();
+            if (merged > 0) {
+              console.log(`[WhatsApp] Hydrated ${merged} messages from socket store.`);
+            }
           }
         }
 
         if (connection === "close") {
           const statusCode = Number(lastDisconnect?.error?.output?.statusCode || 0);
           const loggedOut = statusCode === DisconnectReason.loggedOut;
+          const conflict = statusCode === 440;
           singleton.lastError = mapDisconnectError(statusCode, lastDisconnect?.error?.message);
 
           // Always drop stale socket object on close; it cannot be reused.
@@ -383,7 +637,8 @@ async function ensureSocket(authPath) {
 
           console.log(`[WhatsApp] Disconnected: ${singleton.lastError}`);
 
-          if (loggedOut) {
+          // Do not reconnect on logged-out or conflict loops.
+          if (loggedOut || conflict) {
             clearReconnectTimer();
           } else {
             scheduleReconnect(resolvedAuth);
@@ -400,6 +655,7 @@ async function ensureSocket(authPath) {
             isGroup: chat.id.endsWith("@g.us")
           });
         }
+        schedulePersistCache();
       });
 
       socket.ev.on("messaging-history.set", payload => {
@@ -416,13 +672,13 @@ async function ensureSocket(authPath) {
         }
 
         for (const msg of messages) {
-          const jid = msg?.key?.remoteJid;
-          if (!jid || !jid.endsWith("@g.us")) continue;
           ingestMessageToHistory(msg);
         }
 
         if (payload?.isLatest) {
           singleton.historyBootstrapDone = true;
+          mergeSocketStoreMessages();
+          schedulePersistCache();
         }
       });
 
@@ -436,9 +692,17 @@ async function ensureSocket(authPath) {
             isGroup: contact.id.endsWith("@g.us")
           });
         }
+        schedulePersistCache();
       });
 
       socket.ev.on("messages.upsert", event => {
+        const messages = event?.messages || [];
+        for (const msg of messages) {
+          ingestMessageToHistory(msg);
+        }
+      });
+
+      socket.ev.on("messages.set", event => {
         const messages = event?.messages || [];
         for (const msg of messages) {
           ingestMessageToHistory(msg);
@@ -480,6 +744,53 @@ function isTransientReconnectState() {
   );
 }
 
+function resolveCandidateChats(chatQuery = "", chatType = "any") {
+  const query = normalizeText(chatQuery || "");
+  const candidates = [];
+
+  for (const chat of singleton.chats.values()) {
+    if (!chat?.id) continue;
+
+    const isGroup = Boolean(chat.isGroup || String(chat.id).endsWith("@g.us"));
+    const isDm = String(chat.id).endsWith("@s.whatsapp.net");
+
+    if (chatType === "group" && !isGroup) continue;
+    if (chatType === "dm" && !isDm) continue;
+
+    const label = chat.name || chat.id;
+    const score = query ? scoreTextMatch(query, label) : 1;
+    if (score <= 0) continue;
+
+    candidates.push({
+      id: chat.id,
+      name: label,
+      isGroup,
+      isDm,
+      score
+    });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates;
+}
+
+function getCheckpointForChat(jid) {
+  const ts = parseEpoch(singleton.chatCheckpoints.get(jid), 0);
+  if (ts > 0) return ts;
+  return parseEpoch(singleton.globalLastDigestAt, 0);
+}
+
+function updateCheckpointsForChats(chats, newestTs) {
+  const ts = parseEpoch(newestTs, Math.floor(Date.now() / 1000));
+  singleton.globalLastDigestAt = Math.max(parseEpoch(singleton.globalLastDigestAt, 0), ts);
+  for (const chat of chats || []) {
+    if (!chat?.id) continue;
+    const prev = parseEpoch(singleton.chatCheckpoints.get(chat.id), 0);
+    singleton.chatCheckpoints.set(chat.id, Math.max(prev, ts));
+  }
+  schedulePersistCache();
+}
+
 class WhatsAppPlugin {
   constructor(auth_path, default_country_code, contacts_credentials_path, contacts_token_path, obj) {
     this.authPath = auth_path;
@@ -509,9 +820,21 @@ class WhatsAppPlugin {
     return next;
   }
 
-  async ensureReady() {
+  async ensureReady(options = {}) {
+    const allowCacheFallback = Boolean(options.allowCacheFallback);
+
+    if (allowCacheFallback) {
+      loadPersistedCache(this.authPath);
+      if (singleton.messages.size > 0) {
+        return { ok: true, cacheOnly: true };
+      }
+    }
+
     const initialized = await ensureSocket(this.authPath);
     if (!initialized.ok) {
+      if (allowCacheFallback && singleton.messages.size > 0) {
+        return { ok: true, cacheOnly: true };
+      }
       return {
         ok: false,
         message: `WhatsApp initialization failed: ${initialized.message}`
@@ -532,6 +855,10 @@ class WhatsAppPlugin {
         if (opened) {
           return { ok: true };
         }
+      }
+
+      if (allowCacheFallback && singleton.messages.size > 0) {
+        return { ok: true, cacheOnly: true };
       }
 
       return {
@@ -753,88 +1080,323 @@ class WhatsAppPlugin {
     }
   }
 
-  async summarizeGroupConversation(query) {
+  async warmMessageCache(limitPerChat = 40) {
     const ready = await this.ensureReady();
-    if (!ready.ok) return ready.message;
+    if (!ready.ok) {
+      return { ok: false, message: ready.message, loaded: 0 };
+    }
 
     await this.hydrateGroups();
+    let loaded = mergeSocketStoreMessages();
+
+    const chats = Array.from(singleton.chats.values());
+    for (const chat of chats) {
+      if (!chat?.id) continue;
+      const bucket = singleton.messages.get(chat.id) || [];
+      if (bucket.length > 0) continue;
+      loaded += await pullChatHistoryFromSocket(chat.id, limitPerChat);
+    }
+
+    schedulePersistCache();
+    const diag = getHistoryDiagnostics();
+    return {
+      ok: true,
+      loaded,
+      chats: singleton.chats.size,
+      chatsWithMessages: singleton.messages.size,
+      diagnostics: diag
+    };
+  }
+
+  async getNewMessagesDigest(query) {
+    const ready = await this.ensureReady({ allowCacheFallback: true });
+    if (!ready.ok) return ready.message;
+
+    if (!ready.cacheOnly) {
+      await this.hydrateGroups();
+      mergeSocketStoreMessages();
+    }
 
     const parsePrompt =
-`Extract WhatsApp group summary intent from user query.
-Return only JSON with schema:
+`Extract WhatsApp new-messages digest intent from user query.
+Return JSON only:
 {
-  "group_query": "string or null",
-  "max_messages": number
+  "chat_query": "string or null",
+  "chat_type": "any|group|dm",
+  "max_items": number
 }
 Rules:
-- max_messages default 40
-- cap max_messages to 120
-- if no explicit group, group_query can be null
 Query: ${JSON.stringify(query)}
 `;
 
-    let parsed = { group_query: null, max_messages: 40 };
+    let parsed = { chat_query: null, chat_type: "any", max_items: 25 };
     try {
       const raw = await this.obj.customQuery(parsePrompt);
       const match = String(raw || "").match(/\{[\s\S]*\}/);
       if (match) {
         const json = JSON.parse(match[0]);
         parsed = {
-          group_query: json.group_query || null,
+          chat_query: json.chat_query || null,
+          chat_type: ["any", "group", "dm"].includes(String(json.chat_type || "").toLowerCase())
+            ? String(json.chat_type).toLowerCase()
+            : "any",
+          max_items: Math.max(5, Math.min(80, Number(json.max_items) || 25))
+        };
+      }
+    } catch (_) {
+      parsed = { chat_query: null, chat_type: "any", max_items: 25 };
+    }
+
+    const explicitChatQuery = extractExplicitChatQuery(query);
+    if (explicitChatQuery) {
+      parsed.chat_query = explicitChatQuery;
+    }
+    if (/\bgroup\b/i.test(String(query || ""))) {
+      parsed.chat_type = "group";
+    } else if (/\b(dm|dms|direct message|direct messages|personal chat)\b/i.test(String(query || ""))) {
+      parsed.chat_type = "dm";
+    }
+
+    const chats = resolveCandidateChats(parsed.chat_query, parsed.chat_type);
+    if (chats.length === 0) {
+      return "I could not find a matching WhatsApp chat. Try a clearer chat/group name.";
+    }
+
+    const scopedChats = parsed.chat_query ? chats.slice(0, 3) : chats;
+    const rows = [];
+    let newestSeenTs = 0;
+    let hadAnyCachedMessages = false;
+
+    for (const chat of scopedChats) {
+      const sinceTs = getCheckpointForChat(chat.id);
+      let bucket = singleton.messages.get(chat.id) || [];
+      if (bucket.length === 0 && parsed.chat_query && !ready.cacheOnly) {
+        await pullChatHistoryFromSocket(chat.id, Math.max(40, parsed.max_items * 2));
+        bucket = singleton.messages.get(chat.id) || [];
+      }
+      if (bucket.length > 0) {
+        hadAnyCachedMessages = true;
+      }
+      const fresh = bucket
+        .filter(item => Number(item.timestamp || 0) > sinceTs && !item.fromMe)
+        .slice(-parsed.max_items);
+
+      for (const item of fresh) {
+        const when = new Date(Number(item.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+        rows.push(`[${when}] ${chat.name} | ${item.sender}: ${item.text}`);
+        if (Number(item.timestamp || 0) > newestSeenTs) {
+          newestSeenTs = Number(item.timestamp || 0);
+        }
+      }
+    }
+
+    if (rows.length === 0) {
+      if (parsed.chat_query && !hadAnyCachedMessages) {
+        return `I could resolve ${scopedChats[0].name}, but there are no cached text messages for this chat yet. Keep whatsapp_sync_daemon running while new messages arrive, then I can report unread and summarize.`;
+      }
+      return "No new WhatsApp messages since your last check.";
+    }
+
+    const maxLines = Math.min(rows.length, parsed.max_items);
+    const digestPrompt =
+`Summarize these NEW WhatsApp messages.
+Focus on action items and important updates.
+Keep it concise.
+Messages:\n${rows.slice(-maxLines).join("\n")}
+`;
+
+    let summary;
+    try {
+      summary = await this.obj.customQuery(digestPrompt);
+    } catch (err) {
+      summary = `I found ${rows.length} new messages but failed to summarize: ${String(err?.message || err)}`;
+    }
+
+    updateCheckpointsForChats(scopedChats, newestSeenTs || Math.floor(Date.now() / 1000));
+    return summary;
+  }
+
+  async summarizeConversation(query) {
+    const ready = await this.ensureReady({ allowCacheFallback: true });
+    if (!ready.ok) return ready.message;
+
+    if (!ready.cacheOnly) {
+      await this.hydrateGroups();
+      mergeSocketStoreMessages();
+    }
+
+    const parsePrompt =
+`Extract WhatsApp chat summary intent from user query.
+Return only JSON with schema:
+{
+  "chat_query": "string or null",
+  "chat_type": "any|group|dm",
+  "max_messages": number
+}
+Rules:
+- max_messages default 40
+- cap max_messages to 120
+- if no explicit chat, chat_query can be null
+Query: ${JSON.stringify(query)}
+`;
+
+    let parsed = { chat_query: null, chat_type: "any", max_messages: 40 };
+    try {
+      const raw = await this.obj.customQuery(parsePrompt);
+      const match = String(raw || "").match(/\{[\s\S]*\}/);
+      if (match) {
+        const json = JSON.parse(match[0]);
+        parsed = {
+          chat_query: json.chat_query || null,
+          chat_type: ["any", "group", "dm"].includes(String(json.chat_type || "").toLowerCase())
+            ? String(json.chat_type).toLowerCase()
+            : "any",
           max_messages: Math.max(5, Math.min(120, Number(json.max_messages) || 40))
         };
       }
     } catch (_) {
-      parsed = { group_query: null, max_messages: 40 };
+      parsed = { chat_query: null, chat_type: "any", max_messages: 40 };
     }
 
-    const groups = [];
-    for (const chat of singleton.chats.values()) {
-      if (!chat?.isGroup) continue;
-      const score = parsed.group_query ? scoreTextMatch(parsed.group_query, chat.name || chat.id) : 1;
-      if (score <= 0) continue;
-      groups.push({ id: chat.id, name: chat.name || chat.id, score });
+    const explicitChatQuery = extractExplicitChatQuery(query);
+    if (explicitChatQuery) {
+      parsed.chat_query = explicitChatQuery;
+    }
+    if (/\bgroup\b/i.test(String(query || ""))) {
+      parsed.chat_type = "group";
+    } else if (/\b(dm|dms|direct message|direct messages|personal chat)\b/i.test(String(query || ""))) {
+      parsed.chat_type = "dm";
     }
 
-    groups.sort((a, b) => b.score - a.score);
-    if (groups.length === 0) {
-      return "I could not find a matching WhatsApp group in the current session. Open WhatsApp and sync chats first.";
+    const chats = resolveCandidateChats(parsed.chat_query, parsed.chat_type);
+    if (chats.length === 0) {
+      return "I could not find a matching WhatsApp chat in the current session.";
     }
 
-    if (groups.length > 1 && parsed.group_query) {
-      const sameScore = groups.filter(g => g.score === groups[0].score);
+    if (chats.length > 1 && parsed.chat_query) {
+      const sameScore = chats.filter(c => c.score === chats[0].score).slice(0, 5);
       if (sameScore.length > 1) {
-        const options = sameScore.slice(0, 5).map((g, i) => `${i + 1}. ${g.name}`).join("; ");
-        return `Multiple groups matched. Please specify the group name more clearly. Options: ${options}`;
+        singleton.pendingSelection = {
+          type: "summarize",
+          query,
+          options: sameScore,
+          maxMessages: parsed.max_messages,
+          createdAt: Date.now()
+        };
+        const options = sameScore.map((c, i) => `${i + 1}. ${c.name}`).join("; ");
+        return `Multiple chats matched. Please specify the chat name more clearly. Options: ${options}`;
       }
     }
 
-    const selected = groups[0];
-    const bucket = singleton.messages.get(selected.id) || [];
+    const selected = chats[0];
+    singleton.pendingSelection = null;
+    let loaded = ready.cacheOnly ? 0 : mergeSocketStoreMessages(selected.id);
+    let bucket = singleton.messages.get(selected.id) || [];
+    if (bucket.length === 0 && !ready.cacheOnly) {
+      loaded += await pullChatHistoryFromSocket(selected.id, Math.max(60, parsed.max_messages));
+      bucket = singleton.messages.get(selected.id) || [];
+    }
+
     const messages = bucket
       .filter(item => item.text && item.text.trim())
       .slice(-parsed.max_messages)
       .map(item => {
-        const when = new Date(item.timestamp * 1000).toISOString().slice(0, 16).replace("T", " ");
+        const when = new Date(Number(item.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
         return `[${when}] ${item.sender}: ${item.text}`;
       });
 
     if (messages.length === 0) {
-      return `I do not have recent text messages cached for ${selected.name} yet. After initial sync, I keep up to the latest 50 messages per group.`;
+      const diag = getHistoryDiagnostics();
+      return `I do not have recent text messages cached for ${selected.name} yet. I attempted a live history pull (${loaded} items loaded). History APIs: loadMessages=${diag.hasLoadMessages}, fetchMessageHistory=${diag.hasFetchMessageHistory}, socketStoreChats=${diag.storeChatsWithMessages}.`;
     }
 
     const summarizePrompt =
-`You summarize WhatsApp group conversations.
+`You summarize WhatsApp conversations.
 Output plain text only, concise, and accurate.
 User query: ${JSON.stringify(query)}
-Group: ${selected.name}
+Chat: ${selected.name}
 Messages:\n${messages.join("\n")}
 `;
 
     try {
       return await this.obj.customQuery(summarizePrompt);
     } catch (err) {
-      return `Failed to summarize group conversation: ${String(err?.message || err)}`;
+      return `Failed to summarize chat conversation: ${String(err?.message || err)}`;
+    }
+  }
+
+  async summarizeGroupConversation(query) {
+    return this.summarizeConversation(`${query} group`);
+  }
+
+  async handleFollowUp(input) {
+    const pending = singleton.pendingSelection;
+    if (!pending) {
+      return { handled: false };
+    }
+
+    // Expire stale pending options after 10 minutes.
+    if (Date.now() - Number(pending.createdAt || 0) > 10 * 60 * 1000) {
+      singleton.pendingSelection = null;
+      return { handled: false };
+    }
+
+    const idx = selectIndexFromInput(input, pending.options.length);
+    if (idx < 0) {
+      return { handled: false };
+    }
+
+    const selected = pending.options[idx];
+    singleton.pendingSelection = null;
+
+    if (!selected?.id) {
+      return { handled: true, response: "Invalid selection. Please ask again with the full chat name." };
+    }
+
+    const ready = await this.ensureReady({ allowCacheFallback: true });
+    if (!ready.ok) {
+      return { handled: true, response: ready.message };
+    }
+
+    if (!ready.cacheOnly) {
+      await this.hydrateGroups();
+      mergeSocketStoreMessages(selected.id);
+      await pullChatHistoryFromSocket(selected.id, Math.max(60, Number(pending.maxMessages || 40)));
+    }
+
+    const bucket = singleton.messages.get(selected.id) || [];
+    const maxMessages = Math.max(5, Math.min(120, Number(pending.maxMessages) || 40));
+    const messages = bucket
+      .filter(item => item.text && item.text.trim())
+      .slice(-maxMessages)
+      .map(item => {
+        const when = new Date(Number(item.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+        return `[${when}] ${item.sender}: ${item.text}`;
+      });
+
+    if (messages.length === 0) {
+      return {
+        handled: true,
+        response: `I do not have recent text messages cached for ${selected.name} yet.`
+      };
+    }
+
+    const summarizePrompt =
+`You summarize WhatsApp conversations.
+Output plain text only, concise, and accurate.
+User query: ${JSON.stringify(pending.query || "")}
+Chat: ${selected.name}
+Messages:\n${messages.join("\n")}
+`;
+
+    try {
+      const response = await this.obj.customQuery(summarizePrompt);
+      return { handled: true, response };
+    } catch (err) {
+      return {
+        handled: true,
+        response: `Failed to summarize chat conversation: ${String(err?.message || err)}`
+      };
     }
   }
 }

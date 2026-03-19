@@ -11,13 +11,22 @@
   ],
   "functions": [
     {
-      "name": "summarizeGroupConversation",
-      "description": "Summarize recent messages from a WhatsApp group",
+      "name": "summarizeConversation",
+      "description": "Summarize recent messages from a specific WhatsApp chat (group or DM)",
       "async": true,
       "requires_LLM": false,
-      "output_format": "Short summary of the requested group conversation.",
+      "output_format": "Short summary of the requested WhatsApp conversation.",
       "keywords": [
         "whatsapp group",
+        "whatsapp chat",
+        "summarise chat",
+        "summarize chat",
+        "summarise messages from",
+        "summarise messages in",
+        "summarise my messages in",
+        "summarize messages from",
+        "summarize messages in",
+        "summarize my messages in",
         "group summary",
         "summarize whatsapp",
         "summarise whatsapp",
@@ -25,6 +34,30 @@
         "summarise the latest messages",
         "chat summary",
         "what happened in group"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    },
+    {
+      "name": "getNewMessagesDigest",
+      "description": "Show and summarize new WhatsApp messages since last check across DMs and groups",
+      "async": true,
+      "requires_LLM": false,
+      "output_format": "Digest of new WhatsApp messages and key updates.",
+      "keywords": [
+        "new whatsapp messages",
+        "new messages",
+        "unread messages",
+        "any unread messages",
+        "do i have unread messages",
+        "unread messages in",
+        "latest whatsapp messages",
+        "whatsapp updates",
+        "any new messages",
+        "new messages in dms",
+        "new messages in groups",
+        "what did i miss on whatsapp"
       ],
       "requires": [
         "$INPUT"
