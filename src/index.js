@@ -9,6 +9,7 @@ class Interpreter {
         this.command = {};
         this.plugins = [];
         this.workflowState = null;
+        this.reminderManager = null;
         if(!args.groq_api_key) throw new Error("Please provide groq api key!");
         this.groq_api = args.groq_api_key;
         this.db = {};
@@ -38,6 +39,7 @@ class Interpreter {
             else if (location=="tavily"){location=__dirname+"/plugins/tavily/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="weather"){location=__dirname+"/plugins/weather/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="whatsapp"){location=__dirname+"/plugins/whatsapp/plugindata.json";location=location.replace("/src/","/");try{const b = require("baileys");if(!b){throw new Error("missing");}}catch(err){console.log("Please install baileys via npm.");process.exit(0);}}
+            else if(location=="reminder"){location=__dirname+"/plugins/reminder/plugindata.json";location=location.replace("/src/","/")}
             const resolvedPath = path.resolve(location);
             const dir = path.dirname(resolvedPath);
             if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
@@ -91,6 +93,11 @@ class Interpreter {
         });
         this.db = db;
         this.table_config = table_config;
+    }
+    initReminderSystem(options = {}){
+        const ReminderManager = require("./reminders/ReminderManager.js");
+        this.reminderManager = new ReminderManager(options);
+        this.reminderManager.start();
     }
     async customQuery(query){
         return await answer(query,this.groq_api,true,this);

@@ -1,0 +1,26 @@
+{
+  "name": "Reminder",
+  "description": "Create and manage time-based reminders with snooze actions",
+  "entrypoint": "index.js",
+  "plugin_params": [
+    "reminder_manager"
+  ],
+  "functions": [
+    {
+      "name": "createReminder",
+      "description": "Create a reminder from natural language text",
+      "async": true,
+      "requires_LLM": false,
+      "output_format": "Reminder set confirmation with date/time and reminder text.",
+      "keywords": [
+        "remind me",
+        "set reminder",
+        "reminder",
+        "remind"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    }
+  ]
+}

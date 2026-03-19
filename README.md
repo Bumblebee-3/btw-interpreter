@@ -71,6 +71,7 @@ List of inbuilt plugins
 - `tavily` (Gives the user Web Scraping features for live data, news etc. You will need an API key though.)
 - `weather` (Weather updates. Requires an API key )
 - `whatsapp` (uses Baileys. Supports sending WhatsApp messages via workflow and summarizing group chats; can also use Google Contacts to resolve phone numbers)
+- `reminder` (natural-language reminders with Zenity notification popup and snooze options)
 
 If you want Gmail action workflows like sending emails, ensure your OAuth token includes `https://www.googleapis.com/auth/gmail.send`.
 If you want to address recipients by contact name (for example, "send mail to John"), also include `https://www.googleapis.com/auth/contacts.readonly`.
@@ -79,6 +80,20 @@ If your token is old, regenerate `plugins/token.json` using `plugins/generate_to
 To enable WhatsApp plugin, set `plugins.whatsapp.enabled` to `true` in `config.json`.
 On first WhatsApp command, scan the QR in terminal to connect your WhatsApp account.
 If you want recipient name lookup from Google Contacts, keep contacts paths configured and ensure token has `https://www.googleapis.com/auth/contacts.readonly`.
+
+Reminder plugin usage examples:
+- `remind me about paying rent in a week`
+- `remind me to drink water in five minutes`
+- `remind me about standup at 12am on monday`
+- `remind me about launch check at 12am on 02/06/2026`
+
+When reminder time is reached, a Zenity popup appears with actions:
+- Do not show again
+- Remind in 5 minutes
+- Remind in 10 minutes
+- Remind in 1 hour
+- Remind in 1 day
+- Remind in 1 week
 
 The data passed from plugins is automatically given to GROQ as a system prompt.
 

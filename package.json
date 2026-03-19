@@ -7,10 +7,13 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js",
+    "reminder:daemon": "node reminder_daemon.js",
+    "reminder:daemon:nohup": "nohup node reminder_daemon.js > reminder-daemon.log 2>&1 &"
   },
   "dependencies": {
     "baileys": "^7.0.0-rc.9",
+    "chrono-node": "^2.9.0",
     "dotenv": "^17.2.4",
     "qrcode-terminal": "^0.12.0"
   },

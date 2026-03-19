@@ -40,10 +40,13 @@ const makeWASocket = baileys.default || baileys.makeWASocket;
 const useMultiFileAuthState = baileys.useMultiFileAuthState;
 const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
 const DisconnectReason = baileys.DisconnectReason || {};
+const Browsers = baileys.Browsers || null;
 
 let singleton = {
   socket: null,
   connecting: null,
+  reconnectTimer: null,
+  reconnectAttempts: 0,
   connectionState: "closed",
   lastError: "",
   lastQr: "",
@@ -53,6 +56,48 @@ let singleton = {
   maxStoredMessages: 50,
   historyBootstrapDone: false
 };
+
+function getBrowserIdentity() {
+  if (Browsers && typeof Browsers.macOS === "function") {
+    return Browsers.macOS("Desktop");
+  }
+  return ["BTW Interpreter", "Chrome", "1.0.0"];
+}
+
+function mapDisconnectError(statusCode, rawMessage) {
+  const msg = String(rawMessage || "").toLowerCase();
+  if (statusCode === Number(DisconnectReason.loggedOut)) {
+    return "WhatsApp session logged out. Delete plugins/whatsapp/auth and relink by scanning QR.";
+  }
+  if (statusCode === Number(DisconnectReason.restartRequired)) {
+    return "WhatsApp requested restart. Reconnecting automatically.";
+  }
+  if (msg.includes("couldn't log in") || msg.includes("could not log in") || msg.includes("phone's internet")) {
+    return "Phone refused login handshake. Keep phone unlocked with stable internet, then rescan QR. If it repeats, delete plugins/whatsapp/auth and relink.";
+  }
+  if (statusCode > 0) {
+    return `WhatsApp disconnected (code ${statusCode}). ${String(rawMessage || "").trim()}`;
+  }
+  return String(rawMessage || "Connection closed");
+}
+
+function clearReconnectTimer() {
+  if (!singleton.reconnectTimer) return;
+  clearTimeout(singleton.reconnectTimer);
+  singleton.reconnectTimer = null;
+}
+
+function scheduleReconnect(authPath) {
+  clearReconnectTimer();
+  const attempt = Math.min(6, singleton.reconnectAttempts + 1);
+  singleton.reconnectAttempts = attempt;
+  const delayMs = Math.min(30000, 1500 * Math.pow(2, attempt - 1));
+
+  singleton.reconnectTimer = setTimeout(() => {
+    singleton.reconnectTimer = null;
+    ensureSocket(authPath).catch(() => {});
+  }, delayMs);
+}
 
 function normalizeText(value) {
   return String(value || "")
@@ -303,7 +348,7 @@ async function ensureSocket(authPath) {
         logger: pino({ level: "silent" }),
         markOnlineOnConnect: false,
         syncFullHistory: true,
-        browser: ["BTW Interpreter", "Chrome", "1.0.0"]
+        browser: getBrowserIdentity()
       });
 
       socket.ev.on("creds.update", saveCreds);
@@ -322,16 +367,26 @@ async function ensureSocket(authPath) {
           singleton.connectionState = connection;
           if (connection === "open") {
             console.log("[WhatsApp] Connected.");
+            singleton.reconnectAttempts = 0;
+            clearReconnectTimer();
           }
         }
 
         if (connection === "close") {
           const statusCode = Number(lastDisconnect?.error?.output?.statusCode || 0);
           const loggedOut = statusCode === DisconnectReason.loggedOut;
-          singleton.lastError = String(lastDisconnect?.error?.message || "Connection closed");
+          singleton.lastError = mapDisconnectError(statusCode, lastDisconnect?.error?.message);
+
+          // Always drop stale socket object on close; it cannot be reused.
+          singleton.socket = null;
+          singleton.connectionState = "closed";
+
+          console.log(`[WhatsApp] Disconnected: ${singleton.lastError}`);
+
           if (loggedOut) {
-            singleton.socket = null;
-            singleton.connectionState = "closed";
+            clearReconnectTimer();
+          } else {
+            scheduleReconnect(resolvedAuth);
           }
         }
       });
@@ -414,6 +469,17 @@ async function waitForConnectionOpen(timeoutMs = 12000, intervalMs = 500) {
   return singleton.connectionState === "open";
 }
 
+function isTransientReconnectState() {
+  const err = String(singleton.lastError || "").toLowerCase();
+  return (
+    singleton.connectionState === "connecting" ||
+    singleton.connecting !== null ||
+    singleton.reconnectTimer !== null ||
+    err.includes("restart") ||
+    err.includes("connection closed")
+  );
+}
+
 class WhatsAppPlugin {
   constructor(auth_path, default_country_code, contacts_credentials_path, contacts_token_path, obj) {
     this.authPath = auth_path;
@@ -453,14 +519,24 @@ class WhatsAppPlugin {
     }
 
     if (singleton.connectionState !== "open") {
-      const opened = await waitForConnectionOpen(12000, 500);
+      // Normal wait window for fresh QR scan / immediate connect.
+      let opened = await waitForConnectionOpen(12000, 500);
       if (opened) {
         return { ok: true };
       }
 
+      // If WhatsApp requested restart, keep waiting through automatic reconnect.
+      if (isTransientReconnectState()) {
+        ensureSocket(this.authPath).catch(() => {});
+        opened = await waitForConnectionOpen(20000, 500);
+        if (opened) {
+          return { ok: true };
+        }
+      }
+
       return {
         ok: false,
-        message: "WhatsApp is not connected yet. Scan QR shown in terminal and retry in a few seconds."
+        message: singleton.lastError || "WhatsApp is not connected yet. Scan QR shown in terminal and retry in a few seconds."
       };
     }
 

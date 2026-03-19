@@ -26,6 +26,15 @@ config.plugins.calendar.obj = intr;
 if (config.plugins.whatsapp) config.plugins.whatsapp.obj = intr;
 config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key==""||!config.plugins.tavily.tavily_api_key)?process.env.tapi:config.plugins.tavily.tavily_api_key;
 
+if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
+  intr.initReminderSystem({
+    storagePath: config.plugins.reminder.storage_path,
+    notifyScriptPath: path.resolve(__dirname, "src/scripts/reminder_notify.sh"),
+    pollIntervalMs: config.plugins.reminder.poll_interval_ms
+  });
+  config.plugins.reminder.reminder_manager = intr.reminderManager;
+}
+
 
 // load features (order similar to index.js)
 intr.loadCommands(path.resolve(__dirname,"commands.json"));
@@ -35,6 +44,9 @@ intr.loadPlugins("gmail", config.plugins.gmail, process.env.email);
 intr.loadPlugins("tavily", config.plugins.tavily);
 if (config.plugins.whatsapp && config.plugins.whatsapp.enabled === true) {
   intr.loadPlugins("whatsapp", config.plugins.whatsapp);
+}
+if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
+  intr.loadPlugins("reminder", config.plugins.reminder);
 }
 intr.loadDB(config.rag.location, config.rag.table_limit);
 
