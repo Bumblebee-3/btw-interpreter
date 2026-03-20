@@ -11,6 +11,25 @@
   ],
   "functions": [
     {
+      "name": "getLatestMessage",
+      "description": "Get the latest message from a specific WhatsApp chat (group or DM)",
+      "async": true,
+      "requires_LLM": false,
+      "output_format": "Latest WhatsApp message with sender and time.",
+      "keywords": [
+        "latest message from",
+        "latest message in",
+        "last message from",
+        "last message in",
+        "most recent message from",
+        "what is the latest message from",
+        "show latest whatsapp message"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    },
+    {
       "name": "summarizeConversation",
       "description": "Summarize recent messages from a specific WhatsApp chat (group or DM)",
       "async": true,

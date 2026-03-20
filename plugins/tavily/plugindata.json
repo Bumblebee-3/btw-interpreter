@@ -20,6 +20,7 @@
                 "pros and cons", "best", "top", "ranking", "review",
                 "statistics", "stats", "data", "research", "study", "analysis",
                 "how to", "guide", "tutorial", "steps", "documentation",
+                "lookup", "look up", "search online", "search web", "find online", "find reviews", "reviews of",
                 "2022", "2023", "2024", "2025", "2026","in my area","near me","setup","official","figures"
             ],
             "requires":["$INPUT"],

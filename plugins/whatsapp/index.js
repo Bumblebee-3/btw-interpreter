@@ -3,6 +3,7 @@ const path = require("path");
 const baileys = require("baileys");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
+const { extractContent, extractLinksFromText, formatExtractedContent } = require("../../src/contentExtractor");
 
 if (!global.__btwLibsignalNoiseFilterInstalled) {
   global.__btwLibsignalNoiseFilterInstalled = true;
@@ -57,8 +58,10 @@ let singleton = {
   globalLastDigestAt: 0,
   chatCheckpoints: new Map(),
   pendingSelection: null,
+  lastSummaryContext: null,
   chats: new Map(),
   messages: new Map(),
+  linkSummaries: new Map(), // jid -> array of { url, summary, platform, timestamp }
   maxStoredMessages: 50,
   historyBootstrapDone: false
 };
@@ -129,6 +132,10 @@ function persistCacheNow() {
         jid,
         Array.isArray(items) ? items.slice(-singleton.maxStoredMessages) : []
       ]),
+      linkSummaries: Array.from(singleton.linkSummaries.entries()).map(([jid, items]) => [
+        jid,
+        Array.isArray(items) ? items.slice(-20) : [] // Keep last 20 links per chat
+      ]),
       checkpoints: {
         globalLastDigestAt: singleton.globalLastDigestAt,
         perChat: Object.fromEntries(singleton.chatCheckpoints.entries())
@@ -161,6 +168,7 @@ function loadPersistedCache(authPath) {
 
     const chatEntries = Array.isArray(parsed?.chats) ? parsed.chats : [];
     const messageEntries = Array.isArray(parsed?.messages) ? parsed.messages : [];
+    const linkEntries = Array.isArray(parsed?.linkSummaries) ? parsed.linkSummaries : [];
     const cp = parsed?.checkpoints || {};
 
     singleton.chats = new Map(chatEntries.filter(e => Array.isArray(e) && e.length === 2));
@@ -169,15 +177,37 @@ function loadPersistedCache(authPath) {
         .filter(e => Array.isArray(e) && e.length === 2)
         .map(([jid, items]) => [jid, Array.isArray(items) ? items.slice(-singleton.maxStoredMessages) : []])
     );
+    singleton.linkSummaries = new Map(
+      linkEntries
+        .filter(e => Array.isArray(e) && e.length === 2)
+        .map(([jid, items]) => [jid, Array.isArray(items) ? items : []])
+    );
 
     singleton.globalLastDigestAt = parseEpoch(cp.globalLastDigestAt, 0);
     singleton.chatCheckpoints = new Map(
       Object.entries(cp.perChat || {}).map(([jid, ts]) => [jid, parseEpoch(ts, 0)])
     );
 
+    // Auto-populate chats from message JIDs that don't have explicit chat entries
+    // This ensures community chats and DMs without explicit metadata are still findable
+    for (const jid of singleton.messages.keys()) {
+      if (!singleton.chats.has(jid)) {
+        const isGroup = jid.endsWith("@g.us");
+        const isDm = jid.endsWith("@s.whatsapp.net");
+        const isCommunity = jid.endsWith("@lid");
+        singleton.chats.set(jid, {
+          id: jid,
+          name: jid, // Fallback to JID as name
+          isGroup,
+          isDm,
+          isCommunity
+        });
+      }
+    }
+
     if (singleton.messages.size > 0) {
       singleton.historyBootstrapDone = true;
-      console.log(`[WhatsApp] Loaded cache: ${singleton.chats.size} chats, ${singleton.messages.size} chats with messages.`);
+      console.log(`[WhatsApp] Loaded cache: ${singleton.chats.size} chats, ${singleton.messages.size} chats with messages, ${singleton.linkSummaries.size} chats with links.`);
     }
   } catch (_) {
     // ignore malformed cache
@@ -332,6 +362,246 @@ function extractMessageText(message) {
   return "";
 }
 
+/**
+ * Process links in a message and extract their content
+ * This runs asynchronously in background; extracted summaries are cached
+ */
+async function processLinksInMessage(jid, messageText, sender, timestamp) {
+  if (!jid || !messageText) return;
+
+  const links = extractLinksFromText(messageText);
+  if (links.length === 0) return;
+
+  if (!singleton.linkSummaries.has(jid)) {
+    singleton.linkSummaries.set(jid, []);
+  }
+
+  const bucket = singleton.linkSummaries.get(jid);
+
+  // Process each link (non-blocking, with timeout per link)
+  for (const url of links) {
+    try {
+      // Check if we already have this link
+      if (bucket.some(item => item.url === url)) {
+        continue;
+      }
+
+      // Extract content from the link
+      const extracted = await Promise.race([
+        extractContent(url),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Timeout")), 10000)
+        )
+      ]);
+
+      if (!extracted) continue;
+
+      // Format the extracted content into a summary-friendly text
+      const contentText = formatExtractedContent(extracted);
+
+      bucket.push({
+        url,
+        platform: extracted.platform || "generic",
+        title: extracted.title || "",
+        summary: contentText.substring(0, 2000), // Limit to 2000 chars
+        sender,
+        timestamp,
+        extractedAt: Math.floor(Date.now() / 1000)
+      });
+    } catch (err) {
+      // Log but don't fail - link extraction is background task
+      console.warn(`[WhatsApp] Failed to extract link ${url}: ${err.message}`);
+    }
+  }
+
+  // Trim bucket to last 20 links
+  if (bucket.length > 20) {
+    bucket.splice(0, bucket.length - 20);
+  }
+
+  schedulePersistCache();
+}
+
+/**
+ * Helper: Format link summaries for inclusion in LLM prompts
+ */
+function formatLinksForPrompt(jid, sinceTs = 0) {
+  const bucket = singleton.linkSummaries.get(jid) || [];
+  const recentLinks = bucket.filter(link => Number(link.timestamp || 0) > sinceTs);
+
+  if (recentLinks.length === 0) return "";
+
+  const formatted = recentLinks
+    .map(link => {
+      const when = new Date(Number(link.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+      return `[${when}] ${link.platform.toUpperCase()} from ${link.sender}:\n  URL: ${link.url}\n  ${link.title || ""}\n  ${link.summary.substring(0, 300)}...`;
+    })
+    .join("\n\n");
+
+  return `\n\n[SHARED LINKS & CONTENT]\n${formatted}`;
+}
+
+function getRecentLinkSources(jid, limit = 8) {
+  const bucket = singleton.linkSummaries.get(jid) || [];
+  return bucket
+    .slice(-Math.max(1, Number(limit) || 8))
+    .map(item => ({
+      url: item.url,
+      platform: item.platform || "generic",
+      title: item.title || "",
+      summary: String(item.summary || "").slice(0, 800),
+      sender: item.sender || "unknown",
+      timestamp: Number(item.timestamp || 0)
+    }));
+}
+
+function formatSourcesAppendix(sources = []) {
+  if (!Array.isArray(sources) || sources.length === 0) return "";
+  const lines = sources
+    .slice(0, 5)
+    .map((s, idx) => `${idx + 1}. [${String(s.platform || "generic").toUpperCase()}] ${s.title || s.url} -> ${s.url}`);
+  return `\n\nSources:\n${lines.join("\n")}`;
+}
+
+function rememberSummaryContext(payload = {}) {
+  singleton.lastSummaryContext = {
+    createdAt: Date.now(),
+    lastFollowUpAt: Date.now(),
+    chatName: payload.chatName || "",
+    chatId: payload.chatId || "",
+    userQuery: payload.userQuery || "",
+    messageLines: Array.isArray(payload.messageLines) ? payload.messageLines.slice(-120) : [],
+    links: Array.isArray(payload.links) ? payload.links.slice(-12) : [],
+    followUpHistory: []
+  };
+}
+
+function appendFollowUpHistory(question, response) {
+  const ctx = singleton.lastSummaryContext;
+  if (!ctx) return;
+  if (!Array.isArray(ctx.followUpHistory)) {
+    ctx.followUpHistory = [];
+  }
+  ctx.followUpHistory.push({
+    at: Date.now(),
+    question: String(question || "").slice(0, 400),
+    response: String(response || "").slice(0, 1200)
+  });
+  if (ctx.followUpHistory.length > 6) {
+    ctx.followUpHistory = ctx.followUpHistory.slice(-6);
+  }
+  ctx.lastFollowUpAt = Date.now();
+}
+
+function isLikelyContinuationReply(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+  if (text.split(" ").length > 12) return false;
+  return /^(yes|yeah|yup|no|nope|idk|i dont know|not sure|maybe|more|mainly|mostly|for|use|purpose|budget|coding|ai|ml|deep learning|workflows|linux|battery|performance|portability|build quality)/i.test(text);
+}
+
+function inferFocusEntity(ctx, input) {
+  const current = normalizeText(input);
+  const historyText = (ctx?.followUpHistory || [])
+    .slice(-2)
+    .map(h => `${h?.question || ""} ${h?.response || ""}`)
+    .join(" ");
+  const merged = `${current} ${normalizeText(historyText)}`;
+
+  if (/\basus|zenbook\b/i.test(merged)) return "asus";
+  if (/\blenovo|yoga\b/i.test(merged)) return "lenovo";
+  if (/\bmacbook|neo|apple\b/i.test(merged)) return "macbook_neo";
+  if (/\bgithub|repo|repository|memoria\b/i.test(merged)) return "github_repo";
+  return "";
+}
+
+function isLikelyContextFollowUp(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+  return /(what|which|where|when|who|details|detail|about|repo|repository|github|link|source|youtube|instagram|twitter|facebook|reel|video|post|that one|first|second|third|thought|thoughts|opinion|recommend|worth|buy|good|better|laptop|phone|pc)/i.test(text);
+}
+
+function isExplicitWebLookupRequest(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+  return /(lookup|look up|search|find|web|online|internet|google|reviews|latest reviews|news|check reviews)/i.test(text);
+}
+
+async function answerFromRecentSummaryContext(obj, input) {
+  const ctx = singleton.lastSummaryContext;
+  if (!ctx) return { handled: false };
+
+  if (isExplicitWebLookupRequest(input)) {
+    return { handled: false };
+  }
+
+  if (Date.now() - Number(ctx.createdAt || 0) > 30 * 60 * 1000) {
+    singleton.lastSummaryContext = null;
+    return { handled: false };
+  }
+
+  const contextFollowUp = isLikelyContextFollowUp(input);
+  const continuationReply = isLikelyContinuationReply(input) && (Date.now() - Number(ctx.lastFollowUpAt || ctx.createdAt || 0) <= 8 * 60 * 1000);
+  if (!contextFollowUp && !continuationReply) {
+    return { handled: false };
+  }
+
+  const followUpText = String(input || "");
+  const isOpinionQuestion = /(thought|thoughts|opinion|recommend|worth|buy|good|better|should i|which one)/i.test(followUpText);
+  const focusEntity = inferFocusEntity(ctx, input);
+
+  const prompt =
+`You are answering a WhatsApp follow-up question using provided context from a recent WhatsApp summary.
+Use only these messages/sources as evidence.
+If the question asks for opinion/recommendation, provide a practical opinion grounded in available specs/details and clearly mention uncertainty where data is missing.
+If there are multiple matching items (e.g., two laptops) and the user says "that laptop", briefly compare the likely options and ask one short clarifying question at the end.
+Maintain flow with prior turns: treat short continuation replies like "more for ai workflows" as follow-up context, not as a new topic.
+Avoid generic advice disconnected from the provided laptops/videos/links.
+If primary focus is known, keep the answer centered on that item and only mention alternatives briefly.
+Do not say "I have no context" unless context is truly empty.
+Output concise plain text.
+
+Question type: ${isOpinionQuestion ? "opinion_or_recommendation" : "fact_lookup"}
+Primary focus: ${focusEntity || "none"}
+
+Follow-up question: ${JSON.stringify(String(input || ""))}
+Previous summary context:
+- Chat: ${ctx.chatName || ctx.chatId || "unknown"}
+- Original query: ${JSON.stringify(ctx.userQuery || "")}
+
+Messages:
+${(ctx.messageLines || []).join("\n")}
+
+Content sources:
+${(ctx.links || []).map((s, i) => `${i + 1}. platform=${s.platform} title=${s.title} sender=${s.sender} url=${s.url}\nsummary=${s.summary}`).join("\n")}
+
+Recent follow-up turns:
+${(ctx.followUpHistory || []).map((h, i) => `${i + 1}. Q=${h.question}\nA=${h.response}`).join("\n")}
+`;
+
+  try {
+    const response = await obj.customQuery(prompt);
+    appendFollowUpHistory(input, response);
+    return { handled: true, response };
+  } catch (_) {
+    return { handled: false };
+  }
+}
+
+async function ensureLinkSummariesForChat(jid, maxMessages = 40) {
+  if (!jid) return;
+  const bucket = singleton.messages.get(jid) || [];
+  if (bucket.length === 0) return;
+
+  const start = Math.max(0, bucket.length - Math.max(5, Math.min(120, Number(maxMessages) || 40)));
+  const slice = bucket.slice(start);
+  for (const item of slice) {
+    if (!item?.text) continue;
+    if (!extractLinksFromText(item.text).length) continue;
+    await processLinksInMessage(jid, item.text, item.sender || "unknown", Number(item.timestamp || Math.floor(Date.now() / 1000)));
+  }
+}
+
 function ingestMessageToHistory(msg) {
   const jid = msg?.key?.remoteJid;
   if (!jid) return;
@@ -366,6 +636,11 @@ function ingestMessageToHistory(msg) {
   if (bucket.length > singleton.maxStoredMessages) {
     bucket.splice(0, bucket.length - singleton.maxStoredMessages);
   }
+
+  // Extract and summarize links in the message (async, background operation)
+  processLinksInMessage(jid, text, sender, timestamp).catch(() => {
+    // Silently fail - link extraction is best-effort
+  });
 
   schedulePersistCache();
 }
@@ -512,7 +787,7 @@ function extractExplicitChatQuery(input) {
   const raw = String(input || "").trim();
   if (!raw) return "";
 
-  const match = raw.match(/\b(?:in|from|of|for)\s+([^?.!,\n]+)/i);
+  const match = raw.match(/\b(?:in|from|of|for|to)\s+([^?.!,\n]+)/i);
   if (!match) return "";
 
   let value = String(match[1] || "").trim();
@@ -753,12 +1028,36 @@ function resolveCandidateChats(chatQuery = "", chatType = "any") {
 
     const isGroup = Boolean(chat.isGroup || String(chat.id).endsWith("@g.us"));
     const isDm = String(chat.id).endsWith("@s.whatsapp.net");
+    const isCommunity = String(chat.id).endsWith("@lid");
 
     if (chatType === "group" && !isGroup) continue;
     if (chatType === "dm" && !isDm) continue;
 
+    let score = 0;
     const label = chat.name || chat.id;
-    const score = query ? scoreTextMatch(query, label) : 1;
+    
+    // Score by chat name/label
+    if (query) {
+      score = scoreTextMatch(query, label);
+    } else {
+      score = 1;
+    }
+
+    // If name match is weak, try matching against sender names in this chat's messages
+    if (score < 2 && query) {
+      const messages = singleton.messages.get(chat.id) || [];
+      const senderSet = new Set();
+      for (const msg of messages) {
+        if (msg.sender) senderSet.add(msg.sender);
+      }
+      for (const sender of senderSet) {
+        const senderScore = scoreTextMatch(query, sender);
+        if (senderScore > score) {
+          score = senderScore;
+        }
+      }
+    }
+
     if (score <= 0) continue;
 
     candidates.push({
@@ -1170,6 +1469,7 @@ Query: ${JSON.stringify(query)}
     for (const chat of scopedChats) {
       const sinceTs = getCheckpointForChat(chat.id);
       let bucket = singleton.messages.get(chat.id) || [];
+      await ensureLinkSummariesForChat(chat.id, parsed.max_items * 2);
       if (bucket.length === 0 && parsed.chat_query && !ready.cacheOnly) {
         await pullChatHistoryFromSocket(chat.id, Math.max(40, parsed.max_items * 2));
         bucket = singleton.messages.get(chat.id) || [];
@@ -1202,7 +1502,9 @@ Query: ${JSON.stringify(query)}
 `Summarize these NEW WhatsApp messages.
 Focus on action items and important updates.
 Keep it concise.
-Messages:\n${rows.slice(-maxLines).join("\n")}
+Messages:\n${rows.slice(-maxLines).join("\n")}${
+  scopedChats.map(chat => formatLinksForPrompt(chat.id, getCheckpointForChat(chat.id))).join("")
+}
 `;
 
     let summary;
@@ -1212,8 +1514,17 @@ Messages:\n${rows.slice(-maxLines).join("\n")}
       summary = `I found ${rows.length} new messages but failed to summarize: ${String(err?.message || err)}`;
     }
 
+    const digestSources = scopedChats.flatMap(chat => getRecentLinkSources(chat.id, 4)).slice(-8);
+    rememberSummaryContext({
+      chatName: scopedChats.length === 1 ? scopedChats[0].name : "multiple chats",
+      chatId: scopedChats.length === 1 ? scopedChats[0].id : "",
+      userQuery: query,
+      messageLines: rows.slice(-Math.min(rows.length, 80)),
+      links: digestSources
+    });
+
     updateCheckpointsForChats(scopedChats, newestSeenTs || Math.floor(Date.now() / 1000));
-    return summary;
+    return `${summary}${formatSourcesAppendix(digestSources)}`;
   }
 
   async summarizeConversation(query) {
@@ -1291,10 +1602,12 @@ Query: ${JSON.stringify(query)}
     const selected = chats[0];
     singleton.pendingSelection = null;
     let loaded = ready.cacheOnly ? 0 : mergeSocketStoreMessages(selected.id);
+    await ensureLinkSummariesForChat(selected.id, parsed.max_messages);
     let bucket = singleton.messages.get(selected.id) || [];
     if (bucket.length === 0 && !ready.cacheOnly) {
       loaded += await pullChatHistoryFromSocket(selected.id, Math.max(60, parsed.max_messages));
       bucket = singleton.messages.get(selected.id) || [];
+      await ensureLinkSummariesForChat(selected.id, parsed.max_messages);
     }
 
     const messages = bucket
@@ -1315,14 +1628,85 @@ Query: ${JSON.stringify(query)}
 Output plain text only, concise, and accurate.
 User query: ${JSON.stringify(query)}
 Chat: ${selected.name}
-Messages:\n${messages.join("\n")}
+Messages:\n${messages.join("\n")}${formatLinksForPrompt(selected.id)}
 `;
 
     try {
-      return await this.obj.customQuery(summarizePrompt);
+      const response = await this.obj.customQuery(summarizePrompt);
+      const sources = getRecentLinkSources(selected.id, 8);
+      rememberSummaryContext({
+        chatName: selected.name,
+        chatId: selected.id,
+        userQuery: query,
+        messageLines: messages,
+        links: sources
+      });
+      return `${response}${formatSourcesAppendix(sources)}`;
     } catch (err) {
       return `Failed to summarize chat conversation: ${String(err?.message || err)}`;
     }
+  }
+
+  async getLatestMessage(query) {
+    const ready = await this.ensureReady({ allowCacheFallback: true });
+    if (!ready.ok) return ready.message;
+
+    if (!ready.cacheOnly) {
+      await this.hydrateGroups();
+      mergeSocketStoreMessages();
+    }
+
+    const explicitChatQuery = extractExplicitChatQuery(query);
+    const inferredType = /\bgroup\b/i.test(String(query || ""))
+      ? "group"
+      : /\b(dm|dms|direct message|direct messages|personal chat)\b/i.test(String(query || ""))
+        ? "dm"
+        : "any";
+
+    const chats = resolveCandidateChats(explicitChatQuery, inferredType);
+    if (chats.length === 0) {
+      return "I could not find a matching WhatsApp chat in the current session.";
+    }
+
+    const selected = chats[0];
+    let bucket = singleton.messages.get(selected.id) || [];
+    if (bucket.length === 0 && !ready.cacheOnly) {
+      await pullChatHistoryFromSocket(selected.id, 60);
+      bucket = singleton.messages.get(selected.id) || [];
+    }
+
+    const latest = bucket
+      .filter(item => item && item.text && item.text.trim())
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))[0];
+
+    if (!latest) {
+      return `I do not have recent text messages cached for ${selected.name} yet.`;
+    }
+
+    await ensureLinkSummariesForChat(selected.id, 20);
+    const when = new Date(Number(latest.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+    const response = `Latest message in ${selected.name} at ${when} from ${latest.sender}: ${latest.text}`;
+
+    const recentLines = bucket
+      .filter(item => item && item.text && item.text.trim())
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
+      .slice(0, 20)
+      .reverse()
+      .map(item => {
+        const ts = new Date(Number(item.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+        return `[${ts}] ${item.sender}: ${item.text}`;
+      });
+
+    const sources = getRecentLinkSources(selected.id, 8);
+    rememberSummaryContext({
+      chatName: selected.name,
+      chatId: selected.id,
+      userQuery: query,
+      messageLines: recentLines,
+      links: sources
+    });
+
+    return `${response}${formatSourcesAppendix(sources)}`;
   }
 
   async summarizeGroupConversation(query) {
@@ -1332,7 +1716,7 @@ Messages:\n${messages.join("\n")}
   async handleFollowUp(input) {
     const pending = singleton.pendingSelection;
     if (!pending) {
-      return { handled: false };
+      return await answerFromRecentSummaryContext(this.obj, input);
     }
 
     // Expire stale pending options after 10 minutes.
@@ -1386,12 +1770,20 @@ Messages:\n${messages.join("\n")}
 Output plain text only, concise, and accurate.
 User query: ${JSON.stringify(pending.query || "")}
 Chat: ${selected.name}
-Messages:\n${messages.join("\n")}
+Messages:\n${messages.join("\n")}${formatLinksForPrompt(selected.id)}
 `;
 
     try {
       const response = await this.obj.customQuery(summarizePrompt);
-      return { handled: true, response };
+      const sources = getRecentLinkSources(selected.id, 8);
+      rememberSummaryContext({
+        chatName: selected.name,
+        chatId: selected.id,
+        userQuery: pending.query || "",
+        messageLines: messages,
+        links: sources
+      });
+      return { handled: true, response: `${response}${formatSourcesAppendix(sources)}` };
     } catch (err) {
       return {
         handled: true,
