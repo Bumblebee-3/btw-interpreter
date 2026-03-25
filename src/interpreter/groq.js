@@ -1,3 +1,22 @@
+/* IM SO BORED WHY AM I DOING THIS */
+
+function extractGroqContent(payload) {
+    const choices = Array.isArray(payload?.choices) ? payload.choices : [];
+    const first = choices[0];
+    const content = first?.message?.content;
+    if (typeof content === "string" && content.trim()) {
+        return content;
+    }
+
+    const err = payload?.error?.message;
+    if (typeof err === "string" && err.trim()) {
+        return `Model error: ${err}`;
+    }
+
+    return "I could not generate a response right now. Please try again.";
+}
+
+
 async function answer(query,gapi,cp=false,obj) {
     if(!obj.db.dbPath){
         var prompt;
@@ -21,11 +40,11 @@ async function answer(query,gapi,cp=false,obj) {
         );
 
         const data = await res.json();
-        return data.choices[0].message.content;
+        return extractGroqContent(data);
     } else {
         let answer = await obj.db.searchDB(query,10,obj.table_config);
         let string = "\n";
-        for(i in answer){
+        for (const i in answer) {
             string += `${answer[i].text} (similarity score: ${answer[i].similarity})\n`
         }
         //console.log(string);
@@ -58,7 +77,7 @@ async function answer(query,gapi,cp=false,obj) {
         );
 
         const data = await res.json();
-        return data.choices[0].message.content;
+        return extractGroqContent(data);
     }
 }
 
@@ -94,12 +113,7 @@ async function plugin_answer(query,gapi,func,data,ctx) {
         }
     );
     const d = await res.json();
-    try{
-        return d.choices[0].message.content;
-    } catch (error) {
-        //originalLog("Error in plugin_answer: " + d.error.message);
-        return d.error.message;
-    }
+    return extractGroqContent(d);
 }
 
 

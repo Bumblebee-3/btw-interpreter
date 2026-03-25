@@ -16,14 +16,10 @@ class GoogleCalendar {
 
     async parseIntent(query) {
         const now = new Date().toISOString();
-
         const prompt = `
 You convert natural language into Google Calendar query JSON.
-
 Current time (ISO): ${now}
-
 Return ONLY valid JSON.
-
 Schema:
 {
   "title_keywords": string[] | null,
@@ -32,7 +28,6 @@ Schema:
   "limit": number,
   "include_all_calendars": boolean
 }
-
 Rules:
 - Convert natural language time (tomorrow, next week, March, etc.) into ISO timestamps
 - If no time specified, default to now → +30 days
@@ -47,11 +42,9 @@ Rules:
         try {
             const jsonMatch = raw.match(/\{[\s\S]*\}/);
             if (!jsonMatch) throw new Error("No JSON found");
-
             return JSON.parse(jsonMatch[0]);
         } catch (err) {
             console.error("Calendar AI parse failed:", raw);
-
             const fallbackMin = new Date();
             const fallbackMax = new Date();
             fallbackMax.setDate(fallbackMax.getDate() + 30);
@@ -69,12 +62,9 @@ Rules:
 
     async getUpcomingEvents(query) {
         const intent = await this.parseIntent(query);
-
         const now = new Date();
 
-
         const lowerQuery = query.toLowerCase();
-
 
         const wantsSingleFutureEvent =
         lowerQuery.includes("closest") ||
@@ -87,19 +77,14 @@ Rules:
     if (wantsSingleFutureEvent) {
         const future = new Date();
         future.setFullYear(future.getFullYear() + 1);
-
         intent.time_min_iso = now.toISOString();
         intent.time_max_iso = future.toISOString();
         intent.limit = 1;
     }
 
 
-        const timeMin = intent.time_min_iso
-            ? new Date(intent.time_min_iso).toISOString()
-            : now.toISOString();
-
+        const timeMin = intent.time_min_iso ? new Date(intent.time_min_iso).toISOString() : now.toISOString();
         let timeMax;
-
         if (intent.time_max_iso) {
             timeMax = new Date(intent.time_max_iso).toISOString();
         } else {
@@ -107,16 +92,9 @@ Rules:
             fallback.setDate(fallback.getDate() + 30);
             timeMax = fallback.toISOString();
         }
-
         const limit = intent.limit || 10;
-
-
         const calendarList = await this.calendar.calendarList.list();
-
-        const calendarsToSearch = intent.include_all_calendars
-            ? calendarList.data.items
-            : [calendarList.data.items[0]];
-
+        const calendarsToSearch = intent.include_all_calendars ? calendarList.data.items : [calendarList.data.items[0]];
 
         const eventRequests = calendarsToSearch.map(cal =>
             this.calendar.events.list({
@@ -130,7 +108,6 @@ Rules:
         );
 
         const responses = await Promise.all(eventRequests);
-
         let allEvents = responses.flatMap((res, index) => {
             const calendarName = calendarsToSearch[index].summary;
 
@@ -141,7 +118,6 @@ Rules:
             }));
         });
 
-
         if (intent.title_keywords && intent.title_keywords.length) {
         const tokens = intent.title_keywords
             .flatMap(k => k.toLowerCase().split(/\s+/))
@@ -149,16 +125,11 @@ Rules:
 
         allEvents = allEvents.filter(event => {
             const name = event.name.toLowerCase();
-
             return tokens.some(token => name.includes(token));
         });
     }
 
-
-        const sorted = allEvents.sort(
-            (a, b) => new Date(a.start) - new Date(b.start)
-        );
-
+        const sorted = allEvents.sort((a, b) => new Date(a.start) - new Date(b.start));
         const finalResults = sorted.slice(0, limit);
         return finalResults;
     }

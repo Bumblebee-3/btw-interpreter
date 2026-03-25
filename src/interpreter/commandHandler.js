@@ -1,10 +1,12 @@
+//need to find a better way to do ts 
+
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { spawn } = require("node:child_process");
 const execFileAsync = promisify(execFile);
 
 
-function toRegex(inp) {//need to find a better way to do ts 
+function toRegex(inp) {
   let pattern = inp.toLowerCase();
   pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   pattern = pattern

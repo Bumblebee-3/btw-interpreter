@@ -3,7 +3,6 @@
   "description": "Read and manage Google Calendar events",
   "entrypoint": "index.js",
   "plugin_params": ["credentials_path", "token_path","obj"],
-
   "functions": [
     {
       "name": "getUpcomingEvents",

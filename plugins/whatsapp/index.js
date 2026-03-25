@@ -3,7 +3,7 @@ const path = require("path");
 const baileys = require("baileys");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
-const { extractContent, extractLinksFromText, formatExtractedContent } = require("../../src/contentExtractor");
+const { extractContent, extractLinksFromText, formatExtractedContent, detectPlatform } = require("../../src/contentExtractor");
 
 if (!global.__btwLibsignalNoiseFilterInstalled) {
   global.__btwLibsignalNoiseFilterInstalled = true;
@@ -59,6 +59,7 @@ let singleton = {
   chatCheckpoints: new Map(),
   pendingSelection: null,
   lastSummaryContext: null,
+  lastActiveChat: null,
   chats: new Map(),
   messages: new Map(),
   linkSummaries: new Map(), // jid -> array of { url, summary, platform, timestamp }
@@ -377,6 +378,10 @@ async function processLinksInMessage(jid, messageText, sender, timestamp) {
   }
 
   const bucket = singleton.linkSummaries.get(jid);
+  const contextualMessageText = String(messageText || "")
+    .replace(/https?:\/\/[^\s]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
   // Process each link (non-blocking, with timeout per link)
   for (const url of links) {
@@ -398,12 +403,20 @@ async function processLinksInMessage(jid, messageText, sender, timestamp) {
 
       // Format the extracted content into a summary-friendly text
       const contentText = formatExtractedContent(extracted);
+      const hasRichExtraction = Boolean(contentText && contentText.replace(/\[[^\]]+\]/g, "").trim().length > 25);
+      const fallbackSummary = contextualMessageText
+        ? `Shared with note: ${contextualMessageText}`
+        : `Link shared without extra message text. URL: ${url}`;
+      const finalSummary = hasRichExtraction
+        ? contentText
+        : `${contentText ? `${contentText}\n` : ""}${fallbackSummary}`.trim();
+      const finalTitle = extracted.title || (contextualMessageText ? contextualMessageText.slice(0, 120) : "");
 
       bucket.push({
         url,
         platform: extracted.platform || "generic",
-        title: extracted.title || "",
-        summary: contentText.substring(0, 2000), // Limit to 2000 chars
+        title: finalTitle,
+        summary: finalSummary.substring(0, 2000), // Limit to 2000 chars
         sender,
         timestamp,
         extractedAt: Math.floor(Date.now() / 1000)
@@ -455,12 +468,144 @@ function getRecentLinkSources(jid, limit = 8) {
     }));
 }
 
+function getChatLinkSources(jid, limit = 20) {
+  if (!jid) return [];
+  const bucket = singleton.linkSummaries.get(jid) || [];
+  return bucket
+    .slice(-Math.max(1, Number(limit) || 20))
+    .map(item => ({
+      url: item.url,
+      platform: item.platform || "generic",
+      title: item.title || "",
+      summary: String(item.summary || "").slice(0, 1200),
+      sender: item.sender || "unknown",
+      timestamp: Number(item.timestamp || 0)
+    }));
+}
+
+function normalizeUrlForMatch(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+    const removeKeys = ["fbclid", "gclid", "igshid", "sfnsn", "mc_cid", "mc_eid"];
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      if (/^utm_/i.test(key) || removeKeys.includes(key.toLowerCase())) {
+        parsed.searchParams.delete(key);
+      }
+    }
+    parsed.hash = "";
+    const normalized = parsed.toString();
+    return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  } catch (_) {
+    return raw.replace(/[?#].*$/, "").replace(/\/$/, "");
+  }
+}
+
+function mergeLinkSources(primary = [], fallback = [], limit = 24) {
+  const merged = [];
+  const seen = new Set();
+
+  const pushUnique = (item) => {
+    if (!item) return;
+    const key = normalizeUrlForMatch(item.url || "") || `${String(item.platform || "")}:${String(item.title || "")}`;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(item);
+  };
+
+  for (const item of primary || []) pushUnique(item);
+  for (const item of fallback || []) pushUnique(item);
+
+  return merged.slice(-Math.max(1, Number(limit) || 24));
+}
+
+function getLinkSourcesNearTimestamp(jid, pivotTs, windowSec = 3 * 60 * 60, limit = 6) {
+  const bucket = singleton.linkSummaries.get(jid) || [];
+  const pivot = Number(pivotTs || 0);
+  if (pivot <= 0) return getRecentLinkSources(jid, limit);
+
+  const near = bucket
+    .filter(item => Math.abs(Number(item.timestamp || 0) - pivot) <= windowSec)
+    .slice(-Math.max(1, Number(limit) || 6));
+
+  if (near.length > 0) {
+    return near.map(item => ({
+      url: item.url,
+      platform: item.platform || "generic",
+      title: item.title || "",
+      summary: String(item.summary || "").slice(0, 800),
+      sender: item.sender || "unknown",
+      timestamp: Number(item.timestamp || 0)
+    }));
+  }
+
+  return getRecentLinkSources(jid, limit);
+}
+
 function formatSourcesAppendix(sources = []) {
   if (!Array.isArray(sources) || sources.length === 0) return "";
-  const lines = sources
-    .slice(0, 5)
-    .map((s, idx) => `${idx + 1}. [${String(s.platform || "generic").toUpperCase()}] ${s.title || s.url} -> ${s.url}`);
-  return `\n\nSources:\n${lines.join("\n")}`;
+
+  const deduped = [];
+  const seen = new Set();
+  const ordered = [...sources]
+    .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
+
+  for (const item of ordered) {
+    const key = normalizeUrlForMatch(item?.url || "") || `${String(item?.platform || "")}:${String(item?.title || "")}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+    if (deduped.length >= 5) break;
+  }
+
+  const cleanSnippet = (value, fallback = "shared update") => {
+    const text = String(value || "")
+      .replace(/\[[^\]]+\]/g, " ")
+      .replace(/\bURL:\s*https?:\/\/\S+/gi, " ")
+      .replace(/\bNo preview metadata[^.]*\.?/gi, " ")
+      .replace(/\bShared with note:\s*/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return text ? text.slice(0, 100) : fallback;
+  };
+
+  const labelFor = (source) => {
+    const platform = String(source?.platform || "generic").toLowerCase();
+    const title = String(source?.title || "").trim();
+    const summary = String(source?.summary || "").replace(/\s+/g, " ").trim();
+    const sender = String(source?.sender || "someone").trim();
+    const domain = extractDomainLabel(source?.url || "");
+    const compactTitle = cleanSnippet(title, "");
+    const compactSummary = cleanSnippet(summary, "shared update");
+    const topic = compactTitle || compactSummary;
+
+    if (platform === "facebook") {
+      return topic ? `Facebook link about ${topic}` : `Facebook post shared by ${sender} (preview unavailable)`;
+    }
+    if (platform === "twitter") {
+      return topic ? `Twitter post about ${topic}` : `Twitter/X post shared by ${sender} (preview unavailable)`;
+    }
+    if (platform === "instagram") {
+      return topic ? `Instagram post/reel about ${topic}` : `Instagram post shared by ${sender} (preview unavailable)`;
+    }
+    if (platform === "youtube") {
+      return topic ? `YouTube video on ${topic}` : `YouTube video shared by ${sender}`;
+    }
+
+    if (domain && topic) {
+      return `${domain} link about ${topic}`;
+    }
+    if (domain) {
+      return `${domain} link shared by ${sender}`;
+    }
+
+    return `${platform.toUpperCase()} link: ${topic || `shared by ${sender}`}`;
+  };
+
+  const lines = deduped.map((s, idx) => `${idx + 1}. ${labelFor(s)}`);
+  return lines.length ? `\n\nRelated sources (newest first):\n${lines.join("\n")}` : "";
 }
 
 function rememberSummaryContext(payload = {}) {
@@ -472,7 +617,8 @@ function rememberSummaryContext(payload = {}) {
     userQuery: payload.userQuery || "",
     messageLines: Array.isArray(payload.messageLines) ? payload.messageLines.slice(-120) : [],
     links: Array.isArray(payload.links) ? payload.links.slice(-12) : [],
-    followUpHistory: []
+    followUpHistory: [],
+    lastSelectedLink: payload.lastSelectedLink || null
   };
 }
 
@@ -500,31 +646,440 @@ function isLikelyContinuationReply(input) {
   return /^(yes|yeah|yup|no|nope|idk|i dont know|not sure|maybe|more|mainly|mostly|for|use|purpose|budget|coding|ai|ml|deep learning|workflows|linux|battery|performance|portability|build quality)/i.test(text);
 }
 
-function inferFocusEntity(ctx, input) {
-  const current = normalizeText(input);
-  const historyText = (ctx?.followUpHistory || [])
-    .slice(-2)
-    .map(h => `${h?.question || ""} ${h?.response || ""}`)
-    .join(" ");
-  const merged = `${current} ${normalizeText(historyText)}`;
+function extractDomainLabel(url) {
+  try {
+    const host = new URL(String(url || "")).hostname.toLowerCase();
+    return host.replace(/^www\./, "").split(".").slice(0, 2).join(" ");
+  } catch (_) {
+    return "";
+  }
+}
 
-  if (/\basus|zenbook\b/i.test(merged)) return "asus";
-  if (/\blenovo|yoga\b/i.test(merged)) return "lenovo";
-  if (/\bmacbook|neo|apple\b/i.test(merged)) return "macbook_neo";
-  if (/\bgithub|repo|repository|memoria\b/i.test(merged)) return "github_repo";
+function extractTopicPhrase(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+
+  const m = raw.match(/\b(?:about|on|for|of)\s+([a-z0-9][a-z0-9\s\-]{2,80})/i);
+  if (m && m[1]) {
+    return String(m[1])
+      .replace(/\b(it|this|that|one|link|article|post|video)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  return "";
+}
+
+function tokenizeForLookup(text) {
+  const stop = new Set([
+    "a", "an", "the", "and", "or", "to", "for", "of", "on", "in", "about", "from",
+    "what", "which", "how", "can", "could", "would", "should", "please", "pls", "bruh",
+    "look", "lookup", "search", "find", "online", "web", "internet", "google",
+    "review", "reviews", "opinion", "opinions", "feedback", "experience", "experiences",
+    "no", "mean", "meant", "i", "you", "it", "its", "this", "that", "one", "more"
+  ]);
+
+  return normalizeText(text)
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(token => token.length > 2 && !stop.has(token));
+}
+
+function scoreLinkAgainstTokens(link, tokens = []) {
+  if (!link || !Array.isArray(tokens) || tokens.length === 0) return 0;
+  const haystack = normalizeText(`${link.title || ""} ${link.url || ""} ${link.summary || ""}`);
+  if (!haystack) return 0;
+
+  let score = 0;
+  for (const token of tokens) {
+    if (haystack.includes(token)) {
+      score += token.length >= 6 ? 2 : 1;
+    }
+  }
+  return score;
+}
+
+function findBestContextLink(ctx, text) {
+  const links = Array.isArray(ctx?.links) ? ctx.links : [];
+  if (!links.length) return null;
+
+  const tokens = tokenizeForLookup(text);
+  if (!tokens.length) return null;
+
+  let best = null;
+  let bestScore = 0;
+  for (const link of links) {
+    const score = scoreLinkAgainstTokens(link, tokens);
+    if (score > bestScore) {
+      bestScore = score;
+      best = link;
+    }
+  }
+
+  return bestScore > 0 ? best : null;
+}
+
+function inferFocusEntity(ctx, input, extraText = "") {
+  const explicit = extractTopicPhrase(input);
+  if (explicit) return explicit;
+
+  const fromInputMatch = findBestContextLink(ctx, input);
+  if (fromInputMatch) {
+    return String(fromInputMatch.title || extractDomainLabel(fromInputMatch.url || "") || "").trim();
+  }
+
+  const recentLink = ctx?.lastSelectedLink || (Array.isArray(ctx?.links) ? ctx.links[ctx.links.length - 1] : null);
+  const fromTitle = String(recentLink?.title || "").trim();
+  if (fromTitle) return fromTitle;
+
+  const fromDomain = extractDomainLabel(recentLink?.url || "");
+  if (fromDomain) return fromDomain;
+
+  const previousQuestion = String((ctx?.followUpHistory || []).slice(-1)[0]?.question || "").trim();
+  if (previousQuestion) {
+    const qTopic = extractTopicPhrase(previousQuestion);
+    if (qTopic) return qTopic;
+    return previousQuestion.replace(/\b(what|which|how|about|the|a|an|is|are|was|were)\b/gi, " ").replace(/\s+/g, " ").trim();
+  }
+
+  const prevUser = String(extraText || "").trim();
+  if (prevUser) {
+    const pTopic = extractTopicPhrase(prevUser);
+    if (pTopic) return pTopic;
+  }
+
   return "";
 }
 
 function isLikelyContextFollowUp(input) {
   const text = normalizeText(input);
   if (!text) return false;
-  return /(what|which|where|when|who|details|detail|about|repo|repository|github|link|source|youtube|instagram|twitter|facebook|reel|video|post|that one|first|second|third|thought|thoughts|opinion|recommend|worth|buy|good|better|laptop|phone|pc)/i.test(text);
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  const hasQuestionCue = /\b(what|which|where|when|who|why|how|about|detail|details|explain|summarise|summarize|summary|compare|opinion|recommend|worth|better)\b/i.test(text);
+  const hasReferenceCue = /\b(this|that|it|they|them|those|these|one|first|second|third|link|source|post|video|article)\b/i.test(text);
+  const hasQuestionMark = /\?/.test(String(input || ""));
+
+  if (hasQuestionCue) return true;
+  if (hasReferenceCue && wordCount <= 14) return true;
+  if (hasQuestionMark && wordCount <= 18) return true;
+  return false;
+}
+
+function isDepthExplainFollowUp(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+  return /\b(explain|in depth|in-depth|indepth|deeper|elaborate|more detail|more details|tell me more|deep dive|go deeper)\b/i.test(text);
+}
+
+function sanitizeSummarySnippet(text) {
+  return String(text || "")
+    .replace(/\[[^\]]+\]/g, " ")
+    .replace(/\bURL:\s*https?:\/\/\S+/gi, " ")
+    .replace(/\bNo preview metadata[^.]*\.?/gi, " ")
+    .replace(/\bShared with note:\s*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isExplicitWebLookupRequest(input) {
   const text = normalizeText(input);
   if (!text) return false;
-  return /(lookup|look up|search|find|web|online|internet|google|reviews|latest reviews|news|check reviews)/i.test(text);
+  return /(lookup|look up|search|find|web|online|internet|google|research|check|dig up|explore|news|reviews|rating|ratings|comparison|compare|specs|specifications|issues|problems)/i.test(text);
+}
+
+function buildContextualLookupQuery(input, ctx, obj) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+
+  const hasPronoun = /\b(it|its|this|that|this one|that one)\b/i.test(raw);
+  const prevUser = String(obj?.previousUserQuery || "");
+  const focus = inferFocusEntity(ctx, raw, prevUser);
+
+  if (!hasPronoun && !focus) {
+    return raw;
+  }
+
+  const links = Array.isArray(ctx?.links) ? ctx.links : [];
+  const rawMatchedLink = findBestContextLink(ctx, raw);
+  const focusNorm = normalizeText(focus);
+  const byFocus = links.find(link => {
+    if (!focusNorm) return false;
+    const title = normalizeText(link?.title || "");
+    const url = normalizeText(link?.url || "");
+    return (title && title.includes(focusNorm)) || (url && url.includes(focusNorm));
+  });
+
+  const selected = rawMatchedLink || byFocus || links[links.length - 1] || null;
+  const title = selected ? String(selected.title || "").trim() : "";
+  const url = selected ? String(selected.url || "").trim() : "";
+  const platform = selected ? String(selected.platform || "generic").toLowerCase() : "generic";
+  const rawTokens = tokenizeForLookup(raw);
+  const queryAlreadySpecific = rawTokens.length >= 3 || Boolean(rawMatchedLink);
+
+  const fallbackLabel = (byFocus?.title || byFocus?.url || focus || title || url || "item").trim();
+
+  if (queryAlreadySpecific) {
+    return raw;
+  }
+
+  const intentTokens = [];
+  if (/\b(review|reviews|rating|ratings|feedback|opinion|opinions)\b/i.test(raw)) intentTokens.push("reviews", "user feedback");
+  if (/\b(compare|comparison|versus|vs|alternative|alternatives)\b/i.test(raw)) intentTokens.push("comparisons", "alternatives");
+  if (/\b(issue|issues|problem|problems|bug|bugs|complaint|complaints)\b/i.test(raw)) intentTokens.push("known issues");
+  if (/\b(price|pricing|cost|value)\b/i.test(raw)) intentTokens.push("pricing");
+  if (/\b(spec|specs|specification|specifications|feature|features|performance|benchmark)\b/i.test(raw)) intentTokens.push("specifications", "performance");
+  if (/\b(news|latest|recent|update|updates)\b/i.test(raw)) intentTokens.push("latest updates");
+
+  const uniqueIntent = Array.from(new Set(intentTokens)).slice(0, 4).join(" ");
+  if (uniqueIntent) {
+    return `${fallbackLabel} ${uniqueIntent}`;
+  }
+
+  if (platform === "youtube") {
+    return `${fallbackLabel} summary key points credibility`;
+  }
+
+  return `${fallbackLabel} overview latest information`;
+}
+
+function isExplicitInboxMailRequest(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+  return /(inbox|gmail|email|emails|mailbox|my mail|my email|unread mail|unread email|new emails|new mail)/i.test(text);
+}
+
+function isExplicitPrimaryWhatsAppIntent(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+
+  const asksMessagingAction = /(summarise|summarize|summary|latest|last|new|unread|show|get|list|what were|what are)/i.test(text);
+  const mentionsMessageDomain = /(message|messages|chat|chats|conversation|conversations|links|link)/i.test(text);
+  const hasChatScope = /\b(in|from|of|for|to)\b\s+[a-z0-9@._-]+/i.test(text);
+  return asksMessagingAction && mentionsMessageDomain && hasChatScope;
+}
+
+function usesPronounChatReference(input) {
+  const text = normalizeText(input);
+  if (!text) return false;
+  return /\b(he|him|his|she|her|they|them|their|that chat|that person|that contact)\b/i.test(text);
+}
+
+function rememberActiveChat(chat = {}) {
+  if (!chat?.id) return;
+  singleton.lastActiveChat = {
+    id: chat.id,
+    name: chat.name || chat.id,
+    isGroup: Boolean(chat.isGroup),
+    updatedAt: Date.now()
+  };
+}
+
+function resolveImplicitChatQuery(query, fallback = "") {
+  const explicit = String(fallback || "").trim();
+  if (explicit) return explicit;
+
+  if (!usesPronounChatReference(query)) return "";
+  const last = singleton.lastActiveChat;
+  if (!last?.id) return "";
+  if (Date.now() - Number(last.updatedAt || 0) > 60 * 60 * 1000) return "";
+  return String(last.name || last.id || "").trim();
+}
+
+function selectLinkFromContextByInput(ctx, input) {
+  const links = Array.isArray(ctx?.links) ? ctx.links : [];
+  if (!links.length) return null;
+
+  const raw = normalizeText(input);
+  if (!raw) return links[links.length - 1] || null;
+
+  const tokens = tokenizeForLookup(raw);
+
+  if (/\b(youtube|yt|video)\b/i.test(raw)) {
+    const found = links.find(l => String(l.platform || "").toLowerCase() === "youtube" || /youtube|youtu\.be/i.test(String(l.url || "")));
+    if (found) return found;
+  }
+  if (/\b(facebook|fb|post)\b/i.test(raw)) {
+    const found = links.find(l => String(l.platform || "").toLowerCase() === "facebook" || /facebook|fb\.com/i.test(String(l.url || "")));
+    if (found) return found;
+  }
+  if (/\b(twitter|x|tweet)\b/i.test(raw)) {
+    const found = links.find(l => String(l.platform || "").toLowerCase() === "twitter" || /twitter|x\.com/i.test(String(l.url || "")));
+    if (found) return found;
+  }
+  if (/\b(instagram|insta|reel|ig)\b/i.test(raw)) {
+    const found = links.find(l => String(l.platform || "").toLowerCase() === "instagram" || /instagram/i.test(String(l.url || "")));
+    if (found) return found;
+  }
+
+  if (tokens.length) {
+    let best = null;
+    let bestScore = 0;
+    for (const link of links) {
+      const score = scoreLinkAgainstTokens(link, tokens);
+      if (score > bestScore) {
+        bestScore = score;
+        best = link;
+      }
+    }
+    if (best && bestScore > 0) return best;
+  }
+
+  // 2) Ordinal mention handling (first/second/third).
+  const ordinals = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
+  for (const [word, idx] of Object.entries(ordinals)) {
+    if (new RegExp(`\\b${word}\\b`, "i").test(raw) && links[idx - 1]) {
+      return links[idx - 1];
+    }
+  }
+
+  // 3) Fallback to latest source.
+  return links[links.length - 1] || null;
+}
+
+function inferLinksFromMessageLines(lines = []) {
+  const collected = [];
+  const seen = new Set();
+
+  for (const line of lines) {
+    const text = String(line || "");
+    if (!text) continue;
+    const links = extractLinksFromText(text);
+    for (const url of links) {
+      const key = normalizeUrlForMatch(url) || url;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      collected.push({
+        url,
+        platform: detectPlatform(url) || "generic",
+        title: "",
+        summary: "",
+        sender: "unknown",
+        timestamp: 0
+      });
+    }
+  }
+
+  return collected;
+}
+
+function splitIntoSentences(text) {
+  if (!text) return [];
+  return String(text)
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function trimAtBoundary(text, maxChars) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  const cap = Math.max(80, Number(maxChars) || 400);
+  if (raw.length <= cap) return raw;
+
+  const slice = raw.slice(0, cap);
+  const boundary = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "));
+  if (boundary >= 80) {
+    return slice.slice(0, boundary + 1).trim();
+  }
+
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace >= 60) {
+    return `${slice.slice(0, lastSpace).trim()}...`;
+  }
+  return `${slice.trim()}...`;
+}
+
+function extractiveSummarizeText(text, maxSentences = 6) {
+  const sentences = splitIntoSentences(text);
+  if (!sentences.length) return "";
+
+  const stopWords = new Set([
+    "the", "a", "an", "and", "or", "but", "if", "then", "than", "to", "of", "for", "in", "on", "at", "by", "with", "as", "is", "are", "was", "were", "be", "been", "it", "this", "that", "these", "those", "from", "into", "over", "under", "after", "before", "about", "their", "there", "they", "them", "his", "her", "he", "she", "you", "we", "our", "i"
+  ]);
+
+  const termFreq = new Map();
+  for (const sentence of sentences) {
+    const tokens = sentence.toLowerCase().match(/[a-z][a-z0-9'-]{2,}/g) || [];
+    for (const token of tokens) {
+      if (stopWords.has(token)) continue;
+      termFreq.set(token, (termFreq.get(token) || 0) + 1);
+    }
+  }
+
+  const scored = sentences.map((sentence, idx) => {
+    const tokens = sentence.toLowerCase().match(/[a-z][a-z0-9'-]{2,}/g) || [];
+    const unique = new Set(tokens.filter(t => !stopWords.has(t)));
+    let score = 0;
+    for (const token of unique) {
+      score += termFreq.get(token) || 0;
+    }
+
+    if (/\b(dialysis|kidney|risk|warning|cause|symptom|doctor|treatment|study|report|recommend|advice|health)\b/i.test(sentence)) {
+      score += 12;
+    }
+    if (sentence.length >= 90 && sentence.length <= 260) {
+      score += 6;
+    }
+
+    return { sentence, idx, score };
+  });
+
+  const top = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(3, maxSentences))
+    .sort((a, b) => a.idx - b.idx)
+    .map(s => s.sentence);
+
+  return top.join(" ");
+}
+
+async function buildDeterministicSourceSummary(input, selectedLink) {
+  if (!selectedLink) return "I could not find a matching shared link in the recent WhatsApp context.";
+
+  const platform = String(selectedLink.platform || "generic").toUpperCase();
+  const url = String(selectedLink.url || "").trim();
+
+  let extracted = null;
+  if (url) {
+    try {
+      extracted = await Promise.race([
+        extractContent(url),
+        new Promise(resolve => setTimeout(() => resolve(null), 10000))
+      ]);
+    } catch (_) {
+      extracted = null;
+    }
+  }
+
+  const title = String(extracted?.title || selectedLink.title || "").trim();
+  const description = String(extracted?.description || "").trim();
+  const rawContent = String(extracted?.content || "").trim();
+  const cachedSummary = sanitizeSummarySnippet(selectedLink.summary || "");
+  const asksDepth = /\b(in depth|deep dive|deeper|elaborate|more detail|more details|explain in depth)\b/i.test(String(input || ""));
+
+  const fullText = [rawContent, description].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const compressed = fullText.length >= 220
+    ? extractiveSummarizeText(fullText, asksDepth ? 5 : 2)
+    : "";
+
+  const targetChars = asksDepth ? 1500 : 520;
+  const shortSummary = compressed
+    ? trimAtBoundary(compressed, targetChars)
+    : cachedSummary
+      ? trimAtBoundary(cachedSummary, targetChars)
+      : "I have limited preview metadata for this link right now.";
+
+  if (!compressed && !cachedSummary && String(selectedLink.platform || "").toLowerCase() === "facebook") {
+    const who = String(selectedLink.sender || "someone").trim();
+    return `I can identify this as a Facebook post shared by ${who}, but Facebook preview content is unavailable in the current extract.`;
+  }
+
+  if (title) {
+    return `${title}: ${shortSummary}`;
+  }
+
+  return `${platform} link summary: ${shortSummary}`;
 }
 
 async function answerFromRecentSummaryContext(obj, input) {
@@ -532,6 +1087,15 @@ async function answerFromRecentSummaryContext(obj, input) {
   if (!ctx) return { handled: false };
 
   if (isExplicitWebLookupRequest(input)) {
+    const rewrittenQuery = buildContextualLookupQuery(input, ctx, obj);
+    return { handled: false, rewrittenQuery: rewrittenQuery || String(input || "") };
+  }
+
+  if (isExplicitInboxMailRequest(input)) {
+    return { handled: false };
+  }
+
+  if (isExplicitPrimaryWhatsAppIntent(input)) {
     return { handled: false };
   }
 
@@ -542,12 +1106,38 @@ async function answerFromRecentSummaryContext(obj, input) {
 
   const contextFollowUp = isLikelyContextFollowUp(input);
   const continuationReply = isLikelyContinuationReply(input) && (Date.now() - Number(ctx.lastFollowUpAt || ctx.createdAt || 0) <= 8 * 60 * 1000);
-  if (!contextFollowUp && !continuationReply) {
+  const depthFollowUp = isDepthExplainFollowUp(input);
+  if (!contextFollowUp && !continuationReply && !depthFollowUp) {
     return { handled: false };
   }
 
+  const normalizedInput = normalizeText(input);
+  const contextLinks = Array.isArray(ctx.links) ? ctx.links : [];
+  const expandedChatLinks = ctx.chatId ? getChatLinkSources(ctx.chatId, 24) : [];
+  const inferredLineLinks = inferLinksFromMessageLines(ctx.messageLines || []);
+  const mergedLinks = mergeLinkSources(mergeLinkSources(contextLinks, expandedChatLinks, 24), inferredLineLinks, 30);
+
+  const hasSourceMention = /\b(article|post|link|tweet|reel|video|source|indianexpress|indian express|facebook|instagram|twitter|youtube|x\.com|fb)\b/.test(normalizedInput);
+  const hasSummaryAsk = /\b(summarise|summarize|summary|explain)\b/.test(normalizedInput);
+  const hasAboutSourceAsk = /\b(what about|tell me about|about that|about the)\b/.test(normalizedInput) && hasSourceMention;
+  const isShortSourceReference = hasSourceMention && normalizedInput.split(" ").filter(Boolean).length <= 7;
+  const shouldUsePreviousSource = depthFollowUp && !hasSourceMention;
+  const wantsDirectSourceSummary = (hasSourceMention && (hasSummaryAsk || hasAboutSourceAsk || isShortSourceReference)) || shouldUsePreviousSource;
+
+  if (wantsDirectSourceSummary) {
+    const selectedLink = shouldUsePreviousSource
+      ? (ctx.lastSelectedLink || mergedLinks[mergedLinks.length - 1] || null)
+      : selectLinkFromContextByInput({ ...ctx, links: mergedLinks }, input);
+    if (selectedLink) {
+      ctx.lastSelectedLink = selectedLink;
+    }
+    const response = await buildDeterministicSourceSummary(input, selectedLink);
+    appendFollowUpHistory(input, response);
+    return { handled: true, response };
+  }
+
   const followUpText = String(input || "");
-  const isOpinionQuestion = /(thought|thoughts|opinion|recommend|worth|buy|good|better|should i|which one)/i.test(followUpText);
+  const isOpinionQuestion = /(thought|thoughts|thouhgts|opinion|recommend|worth|buy|good|better|should i|which one)/i.test(followUpText);
   const focusEntity = inferFocusEntity(ctx, input);
 
   const prompt =
@@ -573,7 +1163,7 @@ Messages:
 ${(ctx.messageLines || []).join("\n")}
 
 Content sources:
-${(ctx.links || []).map((s, i) => `${i + 1}. platform=${s.platform} title=${s.title} sender=${s.sender} url=${s.url}\nsummary=${s.summary}`).join("\n")}
+${mergedLinks.map((s, i) => `${i + 1}. platform=${s.platform} title=${s.title} sender=${s.sender} url=${s.url}\nsummary=${s.summary}`).join("\n")}
 
 Recent follow-up turns:
 ${(ctx.followUpHistory || []).map((h, i) => `${i + 1}. Q=${h.question}\nA=${h.response}`).join("\n")}
@@ -748,6 +1338,47 @@ function selectIndexFromInput(input, maxLen) {
   return -1;
 }
 
+function parseRequestedMessageCount(input, fallback = 1) {
+  const raw = String(input || "").toLowerCase();
+  const numMatch = raw.match(/\b(?:last|latest|recent|show|get)?\s*(\d{1,2})(?:\s*(?:messages?|msgs?|emssages|messeges))?\b/i);
+  if (numMatch) {
+    return Math.max(1, Math.min(10, Number(numMatch[1]) || fallback));
+  }
+
+  const wordMap = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10
+  };
+
+  for (const [word, count] of Object.entries(wordMap)) {
+    const pattern = new RegExp(`\\b(?:last|latest|recent|show|get)?\\s*${word}(?:\\s*(?:messages?|msgs?|emssages|messeges))?\\b`, "i");
+    if (pattern.test(raw)) {
+      return count;
+    }
+  }
+
+  const loose = raw.match(/\b(?:last|latest|recent)\b[\s\S]{0,20}\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b/i);
+  if (loose) {
+    const token = String(loose[1]).toLowerCase();
+    if (/^\d+$/.test(token)) {
+      return Math.max(1, Math.min(10, Number(token) || fallback));
+    }
+    if (Object.prototype.hasOwnProperty.call(wordMap, token)) {
+      return wordMap[token];
+    }
+  }
+
+  return Math.max(1, Math.min(10, Number(fallback) || 1));
+}
+
 function parseSendIntentFromInput(input) {
   const raw = String(input || "").trim();
   if (!raw) return null;
@@ -802,6 +1433,43 @@ function extractExplicitChatQuery(input) {
   if (!value) return "";
   if (value.length > 80) return "";
   return value;
+}
+
+function extractRecipientLikeTarget(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+
+  const patterns = [
+    /\b(?:tell|inform|notify|message|msg|text)\s+([^?.!,\n]+?)(?:\s+that\b|\s+about\b|[?.!,]|$)/i,
+    /\blet\s+([^?.!,\n]+?)\s+know\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (!match) continue;
+    const target = String(match[1] || "")
+      .replace(/^the\s+/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (target) return target;
+  }
+
+  return "";
+}
+
+function formatChatNotFoundMessage(input, chatQuery = "", chatType = "any") {
+  const target = String(chatQuery || "").trim() || extractExplicitChatQuery(input) || extractRecipientLikeTarget(input);
+  const scope = chatType === "group"
+    ? " group"
+    : chatType === "dm"
+      ? " direct"
+      : "";
+
+  if (target) {
+    return `I could not find a matching WhatsApp${scope} chat for "${target}" in the current session. Try the exact chat name or phone number.`;
+  }
+
+  return `I could not find a matching WhatsApp${scope} chat in the current session. Try a clearer chat/group name.`;
 }
 
 function scoreTextMatch(query, label) {
@@ -1070,6 +1738,21 @@ function resolveCandidateChats(chatQuery = "", chatType = "any") {
   }
 
   candidates.sort((a, b) => b.score - a.score);
+
+  const anchor = singleton.lastActiveChat;
+  if (anchor?.id) {
+    const ageMs = Date.now() - Number(anchor.updatedAt || 0);
+    if (ageMs <= 60 * 60 * 1000) {
+      for (const candidate of candidates) {
+        if (candidate.id === anchor.id) {
+          candidate.score += 0.6;
+          break;
+        }
+      }
+      candidates.sort((a, b) => b.score - a.score);
+    }
+  }
+
   return candidates;
 }
 
@@ -1356,6 +2039,12 @@ class WhatsAppPlugin {
 
     delete params._recipientCandidates;
     await singleton.socket.sendMessage(resolved.jid, { text });
+    const knownChat = singleton.chats.get(resolved.jid);
+    rememberActiveChat({
+      id: resolved.jid,
+      name: knownChat?.name || resolved.label || resolved.jid,
+      isGroup: String(resolved.jid || "").endsWith("@g.us")
+    });
     return `WhatsApp message sent successfully to ${resolved.label}.`;
   }
 
@@ -1447,8 +2136,11 @@ Query: ${JSON.stringify(query)}
     }
 
     const explicitChatQuery = extractExplicitChatQuery(query);
+    const implicitChatQuery = resolveImplicitChatQuery(query, explicitChatQuery);
     if (explicitChatQuery) {
       parsed.chat_query = explicitChatQuery;
+    } else if (implicitChatQuery) {
+      parsed.chat_query = implicitChatQuery;
     }
     if (/\bgroup\b/i.test(String(query || ""))) {
       parsed.chat_type = "group";
@@ -1458,7 +2150,7 @@ Query: ${JSON.stringify(query)}
 
     const chats = resolveCandidateChats(parsed.chat_query, parsed.chat_type);
     if (chats.length === 0) {
-      return "I could not find a matching WhatsApp chat. Try a clearer chat/group name.";
+      return formatChatNotFoundMessage(query, parsed.chat_query, parsed.chat_type);
     }
 
     const scopedChats = parsed.chat_query ? chats.slice(0, 3) : chats;
@@ -1524,6 +2216,9 @@ Messages:\n${rows.slice(-maxLines).join("\n")}${
     });
 
     updateCheckpointsForChats(scopedChats, newestSeenTs || Math.floor(Date.now() / 1000));
+    if (scopedChats.length === 1) {
+      rememberActiveChat(scopedChats[0]);
+    }
     return `${summary}${formatSourcesAppendix(digestSources)}`;
   }
 
@@ -1570,8 +2265,11 @@ Query: ${JSON.stringify(query)}
     }
 
     const explicitChatQuery = extractExplicitChatQuery(query);
+    const implicitChatQuery = resolveImplicitChatQuery(query, explicitChatQuery);
     if (explicitChatQuery) {
       parsed.chat_query = explicitChatQuery;
+    } else if (implicitChatQuery) {
+      parsed.chat_query = implicitChatQuery;
     }
     if (/\bgroup\b/i.test(String(query || ""))) {
       parsed.chat_type = "group";
@@ -1581,7 +2279,7 @@ Query: ${JSON.stringify(query)}
 
     const chats = resolveCandidateChats(parsed.chat_query, parsed.chat_type);
     if (chats.length === 0) {
-      return "I could not find a matching WhatsApp chat in the current session.";
+      return formatChatNotFoundMessage(query, parsed.chat_query, parsed.chat_type);
     }
 
     if (chats.length > 1 && parsed.chat_query) {
@@ -1600,6 +2298,7 @@ Query: ${JSON.stringify(query)}
     }
 
     const selected = chats[0];
+    rememberActiveChat(selected);
     singleton.pendingSelection = null;
     let loaded = ready.cacheOnly ? 0 : mergeSocketStoreMessages(selected.id);
     await ensureLinkSummariesForChat(selected.id, parsed.max_messages);
@@ -1657,35 +2356,50 @@ Messages:\n${messages.join("\n")}${formatLinksForPrompt(selected.id)}
     }
 
     const explicitChatQuery = extractExplicitChatQuery(query);
+    const implicitChatQuery = resolveImplicitChatQuery(query, explicitChatQuery);
     const inferredType = /\bgroup\b/i.test(String(query || ""))
       ? "group"
       : /\b(dm|dms|direct message|direct messages|personal chat)\b/i.test(String(query || ""))
         ? "dm"
         : "any";
 
-    const chats = resolveCandidateChats(explicitChatQuery, inferredType);
+    const chats = resolveCandidateChats(implicitChatQuery || explicitChatQuery, inferredType);
     if (chats.length === 0) {
-      return "I could not find a matching WhatsApp chat in the current session.";
+      return formatChatNotFoundMessage(query, implicitChatQuery || explicitChatQuery, inferredType);
     }
 
+    const requestedCount = parseRequestedMessageCount(query, 1);
     const selected = chats[0];
+    rememberActiveChat(selected);
     let bucket = singleton.messages.get(selected.id) || [];
     if (bucket.length === 0 && !ready.cacheOnly) {
       await pullChatHistoryFromSocket(selected.id, 60);
       bucket = singleton.messages.get(selected.id) || [];
     }
 
-    const latest = bucket
+    const sortedLatest = bucket
       .filter(item => item && item.text && item.text.trim())
-      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))[0];
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+
+    const latest = sortedLatest[0];
 
     if (!latest) {
       return `I do not have recent text messages cached for ${selected.name} yet.`;
     }
 
     await ensureLinkSummariesForChat(selected.id, 20);
-    const when = new Date(Number(latest.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
-    const response = `Latest message in ${selected.name} at ${when} from ${latest.sender}: ${latest.text}`;
+    let response;
+    if (requestedCount <= 1) {
+      const when = new Date(Number(latest.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+      response = `Latest message in ${selected.name} at ${when} from ${latest.sender}: ${latest.text}`;
+    } else {
+      const picks = sortedLatest.slice(0, requestedCount).reverse();
+      const lines = picks.map(item => {
+        const when = new Date(Number(item.timestamp || 0) * 1000).toISOString().slice(0, 16).replace("T", " ");
+        return `- [${when}] ${item.sender}: ${item.text}`;
+      });
+      response = `Latest ${picks.length} messages in ${selected.name}:\n${lines.join("\n")}`;
+    }
 
     const recentLines = bucket
       .filter(item => item && item.text && item.text.trim())
@@ -1697,7 +2411,7 @@ Messages:\n${messages.join("\n")}${formatLinksForPrompt(selected.id)}
         return `[${ts}] ${item.sender}: ${item.text}`;
       });
 
-    const sources = getRecentLinkSources(selected.id, 8);
+    const sources = getLinkSourcesNearTimestamp(selected.id, Number(latest.timestamp || 0), 3 * 60 * 60, 6);
     rememberSummaryContext({
       chatName: selected.name,
       chatId: selected.id,
@@ -1732,6 +2446,7 @@ Messages:\n${messages.join("\n")}${formatLinksForPrompt(selected.id)}
 
     const selected = pending.options[idx];
     singleton.pendingSelection = null;
+    rememberActiveChat(selected);
 
     if (!selected?.id) {
       return { handled: true, response: "Invalid selection. Please ask again with the full chat name." };

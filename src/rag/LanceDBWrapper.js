@@ -7,7 +7,7 @@ class LanceDBWrapper {
   constructor(options = {}) {
     this.dbPath = options.dbPath || path.join(__dirname, "lancedb");
     this.db = null;
-    this.embeddingDimension = 384; // MiniLM dimension
+    this.embeddingDimension = 384;
     this.embedder = null;
   }
 

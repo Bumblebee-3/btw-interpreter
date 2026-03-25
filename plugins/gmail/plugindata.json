@@ -10,6 +10,28 @@
       "description": "Fetch recent Gmail messages based on query",
       "async": true,
       "requires_LLM": true,
+      "intent_guard": {
+        "enabled": true,
+        "priority": 90,
+        "min_score": 3,
+        "min_confidence": 0.35,
+        "min_token_ratio": 0.5,
+        "keywords": [
+          "inbox",
+          "inboxx",
+          "mailbox",
+          "gmail",
+          "email",
+          "emails",
+          "mail",
+          "mails",
+          "unread",
+          "latest mails",
+          "latest emails",
+          "new mails",
+          "new emails"
+        ]
+      },
       "output_format": [
         {
           "from": "Sender email",

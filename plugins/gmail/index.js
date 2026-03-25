@@ -1,22 +1,12 @@
 const fs = require("fs");
 const { google } = require("googleapis");
 
-function isEmail(value) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
-}
-
+function isEmail(value) {return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim())}
 function normalizeText(value) {
-    return String(value || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+    return String(value || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
-
 function toTokens(value) {
-    const normalized = normalizeText(value);
-    if (!normalized) return [];
-    return normalized.split(" ").filter(Boolean);
+    return (!normalizeText(value)?[]:normalizeText(value).split(" ").filter(Boolean));
 }
 
 function parseHeaderAddresses(headerValue) {
@@ -78,7 +68,7 @@ function selectCandidateFromInput(input, candidates) {
             return candidates[idx];
         }
     }
-
+    //lmao
     const ordinalMap = {
         one: 1,
         first: 1,
@@ -223,9 +213,9 @@ function buildGmailQuery(intent) {
 }
 
 function parseEmailDraftIntentFromInput(input) {
+    //gotta figure out a better? way to do this. maybe use a llm in the future
     const raw = String(input || "").trim();
     if (!raw) return null;
-
     // Case 1: explicit message body present.
     const fullPattern = /(?:write|send|compose)\s+(?:an?\s+)?email\s+to\s+(.+?)\s+(?:regarding|about|subject\s*:?\s*)\s+(.+?)\s+(?:saying|body\s*:?\s*)\s+([\s\S]+)$/i;
     const fullMatch = raw.match(fullPattern);
@@ -298,8 +288,7 @@ class Gmail {
         if ((!params?.subject || !String(params.subject).trim()) && parsed.subject) {
             next.subject = parsed.subject;
         }
-        // Intentionally do NOT force-fill body from vague statements like
-        // "regarding ..." so the assistant still asks for explicit body when needed.
+        // Intentionally not filling body from vague statements like "regarding ..." so the assistant still asks for explicit body when needed.
         if ((!params?.body || !String(params.body).trim()) && parsed.body) {
             next.body = parsed.body;
         }

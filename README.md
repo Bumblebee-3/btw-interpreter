@@ -144,3 +144,15 @@ await db.deleteTable("birthdays");
 
 
 ### Note: All api keys required for this project have a free tier and in most cases (except probably, tavily) you will not exceed the quota.
+
+
+
+
+
+TODO:
+
+[ ] Rewrite ./src/contentExtractor.js
+[ ] Check plugins/whatsapp/index.js
+[ ] Review Plugin and Workflow managers.
+[ ] Use an LLM instead of parseEmailDraftIntentFromInput() in /plugins/gmail/index.js
+[ ] Codex seems to have done a good job with ReminderManager, yet just check it once...

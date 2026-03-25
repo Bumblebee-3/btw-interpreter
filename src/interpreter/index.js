@@ -1,8 +1,11 @@
 const {checkCommands , handleCommand} = require("./commandHandler.js");
-const {checkPlugins , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
+const {resolvePluginIntent , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
 const {handleWorkflowInput} = require("./workflowHandler.js");
 const {answer} = require("./groq.js");
 async function handle(query,obj){
+    obj.previousUserQuery = obj.lastUserQuery || "";
+    obj.lastUserQuery = query;
+
     const workflowResult = await handleWorkflowInput(query, obj);
     if (workflowResult.handled) {
         return workflowResult.response;
@@ -13,16 +16,20 @@ async function handle(query,obj){
         return pluginFollowUp.response;
     }
 
-    let c = checkCommands(query,obj);
+    const effectiveQuery = (pluginFollowUp && typeof pluginFollowUp.rewrittenQuery === "string" && pluginFollowUp.rewrittenQuery.trim())
+        ? pluginFollowUp.rewrittenQuery.trim()
+        : query;
+
+    let c = checkCommands(effectiveQuery,obj);
     if(c.isCommand==true){
         
         return await handleCommand(c.cmd);
     } else {
-        let p= checkPlugins(query,obj);
+        let p= await resolvePluginIntent(effectiveQuery,obj);
         if(p.isPlugin==true){
-            return await handlePlugin(p.plugin,p.function,query,obj.groq_api,obj);
+            return await handlePlugin(p.plugin,p.function,effectiveQuery,obj.groq_api,obj);
         } else {
-            return await answer(query,obj.groq_api,false,obj);
+            return await answer(effectiveQuery,obj.groq_api,false,obj);
         }
     }
 }

@@ -10,6 +10,17 @@
             "description":"Searches online for given input and answer the question.",
             "async":true,
             "requires_LLM":false,
+            "intent_guard": {
+                "enabled": true,
+                "priority": 80,
+                "min_score": 3,
+                "min_confidence": 0.35,
+                "min_token_ratio": 0.5,
+                "keywords": [
+                    "look up", "lookup", "search", "find", "online", "internet", "web", "google",
+                    "review", "reviews", "ratings", "user experiences", "news", "latest news"
+                ]
+            },
             "keywords": [
                 "today", "now", "current", "latest", "recent", "breaking","this week","this month","this year",
                 "news", "headline", "report", "announcement","release","verdict","launch",

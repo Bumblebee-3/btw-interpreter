@@ -6,234 +6,180 @@ Plugins extend the assistant’s capabilities without modifying the core interpr
 
 ---
 
-## How Plugins Work
+## Runtime Pipeline
 
-1. User query is received.
-2. Keyword matcher checks loaded plugins.
-3. If keywords match, the plugin function is triggered.
-4. Plugin returns data.
-5. Returned data is injected into GROQ as a system prompt.
-6. GROQ generates the final response using that data.
+Incoming user text is processed in this order:
 
-Plugins do **not** directly answer the user unless explicitly designed to. They provide structured context to the LLM.
+1. Workflow engine checks active or new workflows.
+2. Plugin follow-up hooks run (optional per plugin).
+3. Built-in command handler runs.
+4. Plugin intent resolution picks a plugin function.
+5. If no plugin/command/workflow matches, default LLM answer is used.
+
+Important:
+- A follow-up hook may rewrite the query without directly handling it.
+- Workflow handling is prioritized before plugin function routing.
 
 ---
 
-## Plugin Structure
+## Plugin Folder Structure
 
-Each plugin must have its own directory inside your plugins folder:
+Each plugin lives in its own folder.
 
-```
+```text
 plugins/
-   your-plugin/
-      plugindata.json
-      index.js
+    your-plugin/
+        plugindata.json
+        index.js
 ```
 
-### Required Files
-
-- `plugindata.json` (compulsory)
-- `index.js` (entrypoint defined in plugindata.json)
+Required files:
+- plugindata.json
+- index.js (entrypoint declared in plugindata.json)
 
 ---
 
-# plugindata.json
+## plugindata.json
 
-This file defines the plugin metadata and how it integrates with the interpreter.
+Minimal shape:
+
+```json
+{
+    "name": "PluginName",
+    "description": "What this plugin does",
+    "entrypoint": "index.js",
+    "plugin_params": ["param1", "param2"],
+    "functions": [],
+    "workflows": []
+}
+```
+
+Top-level fields:
+- name: plugin display name
+- description: short summary
+- entrypoint: plugin class file
+- plugin_params: constructor args resolved from runtime context (order matters)
+- functions: stateless function capabilities
+- workflows: stateful action definitions
+
+---
+
+## Function Definitions
+
+Each item in functions maps to one class method.
 
 Example:
 
 ```json
 {
-    "name":"Tavily",
-    "description":"Web Queries functionality to AI",
-    "entrypoint":"index.js",
-    "plugin_params":["search_depth","country","tavily_api_key"],
-    
-    "functions":[
-        {
-            "name":"searchOnline",
-            "description":"Searches online for given input and answer the question.",
-            "async":true,
-            "requires_LLM":false,
-            "keywords": [
-                "today", "now", "current", "latest", "recent", "breaking","this week","this month","this year",
-                "news", "headline", "report", "announcement","release","verdict","launch",
-                "won", "lost", "results", "score",
-                "price", "cost", "fees", "rate", "stock", "market",
-                "available", "availability", "where to buy", "tickets","booking",
-                "compare", "vs", "versus", "difference", "better than",
-                "pros and cons", "best", "top", "ranking", "review",
-                "statistics", "stats", "data", "research", "study", "analysis",
-                "how to", "guide", "tutorial", "steps", "documentation",
-                "2022", "2023", "2024", "2025", "2026","in my area","near me","setup","official","figures"
-            ],
-            "requires":["$INPUT"],
-            "output_format": "Lionel Messi, born in 1987, is an Argentine footballer widely regarded as one of the greatest players of his generation..."
-        }
-    ]
+    "name": "searchOnline",
+    "description": "Search and return useful context",
+    "async": true,
+    "requires_LLM": true,
+    "keywords": ["search", "look up", "web"],
+    "requires": ["$INPUT"],
+    "output_format": "Concise plain text"
 }
 ```
 
----
+Fields:
+- name: must match class method name
+- description: purpose of function
+- async: true if Promise-based
+- requires_LLM:
+    - true: plugin result is post-processed by LLM
+    - false: raw plugin result is returned
+- keywords: heuristic trigger terms
+- requires: currently $INPUT is the main value
+- output_format: guidance for LLM formatting
 
-## Field Explanation
+### Optional: intent_guard
 
-### name
-Name of the plugin.
-
-### description
-Short description of what the plugin does.
-
-### entrypoint
-Main file that exports the plugin class.
-
-### plugin_params
-Parameters passed into the constructor of your plugin class.
-
----
-
-## Function Object Fields
-
-Each function inside `"functions"` defines one callable capability.
-
-### name
-Name of the method inside your class.
-
-### description
-What the function does.
-
-### async
-Set to `true` if the function returns a Promise.
-
-### requires_LLM
-If `true`, output will be processed again by GROQ before responding.  
-If `false`, output is injected directly.
-
-### keywords
-If the user query contains any of these keywords, this function may trigger.
-
-### requires
-Special variables:
-- `$INPUT` → Full user query
-- (Future extensibility supported)
-
-### output_format
-Example format of the output. This helps GROQ understand how to structure the final response.
-
----
-
-# index.js
-
-Your entrypoint must export a class.
-
-Example:
-
-```javascript
-class Tavily {
-    constructor(search_depth, country, tavily_api_key) {
-        this.search_depth = search_depth;
-        this.country = country;
-        this.tavily_api_key = tavily_api_key;
-    }
-
-    async searchOnline(input) {
-        try {
-            const payload = {
-                query: input,
-                include_answer: "basic",
-                search_depth: "advanced"
-            };
-
-            const response = await fetch("https://api.tavily.com/search", {
-                method: "POST",
-                headers: {
-                    "Authorization": \`Bearer \${this.tavily_api_key}\`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                console.warn("HTTP error:", response.status);
-                return "Tavily failed.";
-            }
-
-            const data = await response.json();
-
-            return (
-                data.answer ||
-                data.results?.[0]?.content ||
-                "Tavily failed."
-            );
-
-        } catch (err) {
-            console.warn("Fetch error:", err);
-            return "Tavily failed.";
-        }
-    }
-}
-
-module.exports = Tavily;
-```
-
----
-
-## Constructor Rules
-
-The constructor parameters must match `plugin_params` in `plugindata.json`.
-
-If your `plugin_params` is:
+Functions can define metadata guards for high-precision routing.
 
 ```json
-"plugin_params":["search_depth","country","tavily_api_key"]
+"intent_guard": {
+    "enabled": true,
+    "priority": 90,
+    "min_score": 3,
+    "min_confidence": 0.35,
+    "min_token_ratio": 0.5,
+    "keywords": ["inbox", "email", "gmail"]
+}
 ```
 
-Then your constructor must be:
+Guard behavior:
+- Runs before normal heuristic/LLM classification.
+- Higher priority wins over lower priority.
+- Useful to prevent cross-plugin misroutes for critical intents.
+
+---
+
+## Function Routing Behavior
+
+Plugin function routing is hybrid:
+
+1. intent_guard match (if configured)
+2. keyword heuristic scoring
+3. LLM classifier fallback when heuristic confidence is low or ambiguous
+4. heuristic fallback if classifier is weak/unavailable
+
+Best practice:
+- Use focused keywords.
+- Add intent_guard for critical routes.
+- Keep descriptions short and specific.
+
+---
+
+## Plugin Class Contract
+
+Entrypoint must export a class.
 
 ```javascript
-constructor(search_depth, country, tavily_api_key)
+class MyPlugin {
+    constructor(param1, param2, obj) {
+        this.param1 = param1;
+        this.param2 = param2;
+        this.obj = obj;
+    }
+
+    async someFunction(input) {
+        return "result";
+    }
+}
+
+module.exports = MyPlugin;
 ```
 
-Order matters.
+Rules:
+- Constructor parameter order must match plugin_params.
+- Handle failures gracefully.
+- Return stable, predictable outputs (string preferred).
 
 ---
 
-## Best Practices
+## Optional Follow-up Hook
 
-- Keep plugins stateless when possible.
-- Handle API failures gracefully.
-- Never crash the interpreter.
-- Always return a string.
-- Avoid blocking operations unless necessary.
-- Validate required parameters before making external requests.
+Plugins may implement handleFollowUp(input) for conversational continuity.
 
----
+Accepted return shapes:
 
-## Security Notice
+```javascript
+{ handled: true, response: "..." }
+{ handled: false }
+{ handled: false, rewrittenQuery: "..." }
+```
 
-Plugins can access external APIs and system data.  
-Only install trusted plugins.
-
----
-
-## Final Notes
-
-Plugins are designed to:
-- Inject live data
-- Extend functionality
-- Keep the core interpreter minimal
-- Allow community-driven expansion
-
-Build responsibly.
+Semantics:
+- handled true: plugin fully answers the turn.
+- handled false + rewrittenQuery: query continues through normal routing, using rewritten text.
+- handled false only: no follow-up action.
 
 ---
 
-# Action Workflows (Stateful)
+## Stateful Workflows
 
-Plugins can also define stateful workflows for actions like sending emails, creating calendar events, posting to chat apps, etc.
-
-Workflows are declarative and live in `plugindata.json` under a top-level `workflows` array.
+Workflows are declared in plugindata.json and executed by method name.
 
 Example:
 
@@ -242,15 +188,15 @@ Example:
     "workflows": [
         {
             "name": "send_email",
-            "description": "Collect details and send an email",
+            "description": "Collect details and send email",
             "keywords": ["send email", "compose email"],
             "required_params": [
-                { "name": "recipient", "description": "Please provide recipient email.", "type": "email" },
-                { "name": "subject", "description": "Please provide subject.", "type": "string" },
-                { "name": "body", "description": "Please provide body.", "type": "string" }
+                { "name": "recipient", "description": "Recipient email", "type": "email" },
+                { "name": "subject", "description": "Email subject", "type": "string" },
+                { "name": "body", "description": "Email body", "type": "string" }
             ],
             "optional_params": [
-                { "name": "cc", "description": "Optional CC email.", "type": "email" }
+                { "name": "cc", "description": "Optional CC", "type": "email" }
             ],
             "execute": "sendEmailWorkflow"
         }
@@ -258,23 +204,98 @@ Example:
 }
 ```
 
-Rules:
-- `required_params` can be either strings or objects.
-- `optional_params` can be either strings or objects.
-- `execute` must be a method name implemented in your plugin class.
-- The interpreter will collect missing required params over multiple turns.
-- If a required param already exists in user input, it will not be asked again.
-- Once all required params are available, the interpreter executes the workflow automatically.
-- User can cancel active workflow by saying cancel/stop/abort.
+Workflow notes:
+- required_params and optional_params accept strings or objects.
+- Missing required params are collected over turns.
+- User can cancel with cancel/stop/abort style input.
 
-Execution signature in plugin class:
+Execution signature:
 
 ```javascript
 async sendEmailWorkflow(params, context) {
-    // params contains required and optional values
-    // context contains runtime metadata
     return "Done";
 }
 ```
 
-This mechanism is plugin-agnostic, so the same pattern works for Gmail, Calendar, WhatsApp, Signal, Discord, and future integrations.
+Where:
+- params: collected required/optional values
+- context.input: latest user turn
+- context.workflow: workflow name
+
+---
+
+## Workflow Return Contract
+
+If your workflow needs more user input after execution attempt, return:
+
+```json
+{
+    "status": "needs_input",
+    "field": "recipient",
+    "message": "Please provide recipient name or email."
+}
+```
+
+Behavior:
+- Workflow remains active.
+- Engine asks for the missing field and continues collection.
+
+Any other return value ends the workflow.
+
+---
+
+## Optional Workflow Prefill Hook
+
+Plugins can implement:
+
+```javascript
+async prefillWorkflowParams({ workflow, input, params }) {
+    return { recipient: "Alice" };
+}
+```
+
+Use this to extract parameters from natural phrasing before prompting the user.
+
+---
+
+## Generic Send-Intent Channel Selection
+
+The workflow engine can detect generic send phrasing such as:
+- tell X ...
+- inform X ...
+- notify X ...
+- let X know ...
+
+If multiple send workflows exist (for example Gmail and WhatsApp), it asks the user to choose a channel.
+
+This is engine-level behavior and requires no plugin-specific code beyond normal send workflows.
+
+---
+
+## Best Practices
+
+- Keep plugin methods resilient and side-effect safe.
+- Never throw uncaught exceptions to the interpreter.
+- Prefer generic logic over hardcoded domain examples.
+- Use intent_guard for high-risk misroutes.
+- Keep workflow prompts and field descriptions clear.
+- Return actionable error messages, including interpreted target when useful.
+
+---
+
+## Security
+
+Plugins can access external APIs and local resources.
+Install only trusted plugins and protect secrets in config/env files.
+
+---
+
+## Quick Checklist
+
+- plugindata.json has correct entrypoint and plugin_params order
+- Class constructor matches plugin_params order
+- Every function name exists in class
+- Workflow execute method exists in class
+- Workflow returns needs_input object when blocked
+- Optional handleFollowUp/prefillWorkflowParams implemented if needed
+- Error paths return clear text (not stack traces)

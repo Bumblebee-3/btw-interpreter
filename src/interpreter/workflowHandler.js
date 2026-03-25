@@ -37,6 +37,16 @@ function scoreWorkflowMatch(query, workflow) {
   const inputTokens = new Set(input.split(/[^a-z0-9@._-]+/i).filter(Boolean));
   const keywords = Array.isArray(workflow.keywords) ? workflow.keywords : [];
 
+  if (String(workflow?.name || "").toLowerCase().startsWith("send_")) {
+    // Strict gating: only explicit send-authoring verbs can start send_* workflows.
+    // Do NOT treat generic "message in" as send intent, otherwise queries like
+    // "latest message in HMT" are misrouted to send workflows.
+    const hasSendVerb = /\b(send|write|compose|draft|text|dm)\b/i.test(input);
+    if (!hasSendVerb) {
+      return 0;
+    }
+  }
+
   let score = 0;
   for (const keyword of keywords) {
     const key = String(keyword).toLowerCase().trim();
@@ -62,6 +72,12 @@ function scoreWorkflowMatch(query, workflow) {
   }
 
   return score;
+}
+
+function isExplicitCancelIntent(input) {
+  const normalized = String(input || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return /^(cancel|stop|abort|nevermind|never mind|forget it|drop this|quit workflow|cancel workflow)$/i.test(normalized);
 }
 
 function findWorkflowMatch(query, obj) {
@@ -136,6 +152,104 @@ function parseJsonObject(raw) {
     return JSON.parse(match[0]);
   } catch (_) {
     return null;
+  }
+}
+
+function extractGenericSendIntent(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/^\s*(?:hey|hi|hello)\s*,?\s*/i, "")
+    .replace(/^\s*(?:can\s+you|can\s+u|could\s+you|would\s+you|will\s+you|pls|plz|please|just)\s+/i, "")
+    .trim();
+
+  const patterns = [
+    /^(?:please\s+|just\s+)?tell\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
+    /^(?:please\s+|just\s+)?inform\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
+    /^(?:please\s+|just\s+)?notify\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
+    /^(?:please\s+|just\s+)?let\s+(.+?)\s+know\s+(?:that\s+)?([\s\S]+)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+
+    const recipient = String(match[1] || "")
+      .trim()
+      .replace(/^(?:to\s+)/i, "")
+      .replace(/[.!?]+$/g, "");
+    const message = String(match[2] || "").trim();
+    if (!recipient || !message) continue;
+
+    return { recipient, message };
+  }
+
+  return null;
+}
+
+function getSendWorkflowCandidates(obj) {
+  const out = [];
+  for (const plugin of obj?.plugins || []) {
+    const workflows = Array.isArray(plugin?.data?.workflows) ? plugin.data.workflows : [];
+    for (const rawWorkflow of workflows) {
+      const workflow = normalizeWorkflow(rawWorkflow);
+      if (!String(workflow?.name || "").toLowerCase().startsWith("send_")) continue;
+      out.push({ plugin, workflow });
+    }
+  }
+  return out;
+}
+
+function describeSendWorkflowOptions(options) {
+  return options
+    .map((opt, idx) => `${idx + 1}. ${opt.plugin?.data?.name || opt.workflow?.name}`)
+    .join("; ");
+}
+
+function chooseWorkflowOption(input, options) {
+  const raw = String(input || "").trim().toLowerCase();
+  if (!raw || !Array.isArray(options) || options.length === 0) return null;
+
+  const numeric = raw.match(/^(?:option\s*)?(\d{1,2})$/i);
+  if (numeric) {
+    const idx = Number(numeric[1]) - 1;
+    if (idx >= 0 && idx < options.length) return options[idx];
+  }
+
+  for (const option of options) {
+    const pluginName = String(option.plugin?.data?.name || "").toLowerCase();
+    const workflowName = String(option.workflow?.name || "").toLowerCase();
+    if (pluginName && raw.includes(pluginName)) return option;
+    if (workflowName && raw.includes(workflowName.replace(/^send_/, "").replace(/_/g, " "))) return option;
+  }
+
+  if (/\bwhatsapp|wa\b/i.test(raw)) {
+    return options.find(opt => /whatsapp/i.test(String(opt.plugin?.data?.name || "") + " " + String(opt.workflow?.name || ""))) || null;
+  }
+  if (/\bmail|email|gmail\b/i.test(raw)) {
+    return options.find(opt => /gmail|email/i.test(String(opt.plugin?.data?.name || "") + " " + String(opt.workflow?.name || ""))) || null;
+  }
+
+  return null;
+}
+
+function prefillByIntent(state, sendIntent) {
+  if (!state || !sendIntent) return;
+  const recipient = String(sendIntent.recipient || "").trim();
+  const message = String(sendIntent.message || "").trim();
+  if (!recipient || !message) return;
+
+  if (Object.prototype.hasOwnProperty.call(state.params, "recipient")) {
+    state.params.recipient = recipient;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(state.params, "message")) {
+    state.params.message = message;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(state.params, "body")) {
+    state.params.body = message;
   }
 }
 
@@ -246,10 +360,15 @@ Latest user message: ${JSON.stringify(input)}
 }
 
 function initializeWorkflowState(match) {
+  const params = {};
+  for (const param of [...match.workflow.required_params, ...match.workflow.optional_params]) {
+    params[param.name] = undefined;
+  }
+
   return {
     plugin: match.plugin,
     workflow: match.workflow,
-    params: {},
+    params,
     startedAt: Date.now()
   };
 }
@@ -287,7 +406,7 @@ async function applyPluginPrefill(state, obj, input) {
 
     mergeExtractedParams(state, maybeValues);
   } catch (_) {
-    // Plugin prefill is optional and best-effort.
+    // ignore for now
   }
 }
 
@@ -322,7 +441,7 @@ async function continueActiveWorkflow(input, obj) {
   const state = obj.workflowState;
   const extracted = await extractParamsWithLLM(input, state, obj);
 
-  if (extracted.intent === "cancel") {
+  if (extracted.intent === "cancel" && isExplicitCancelIntent(input)) {
     obj.workflowState = null;
     return {
       handled: true,
@@ -351,7 +470,7 @@ async function startNewWorkflow(match, input, obj) {
   obj.workflowState = state;
 
   const extracted = await extractParamsWithLLM(input, state, obj);
-  if (extracted.intent === "cancel") {
+  if (extracted.intent === "cancel" && isExplicitCancelIntent(input)) {
     obj.workflowState = null;
     return {
       handled: true,
@@ -380,6 +499,41 @@ async function handleWorkflowInput(input, obj) {
     return { handled: false };
   }
 
+  if (obj.workflowState && obj.workflowState.type === "workflow_channel_selection") {
+    const state = obj.workflowState;
+
+    if (isExplicitCancelIntent(input)) {
+      obj.workflowState = null;
+      return {
+        handled: true,
+        response: "Okay, I cancelled that workflow."
+      };
+    }
+
+    const selected = chooseWorkflowOption(input, state.options || []);
+    if (!selected) {
+      return {
+        handled: true,
+        response: `Please choose how to send it: ${describeSendWorkflowOptions(state.options || [])}`
+      };
+    }
+
+    const concrete = initializeWorkflowState({ plugin: selected.plugin, workflow: selected.workflow });
+    prefillByIntent(concrete, state.sendIntent);
+    obj.workflowState = concrete;
+
+    const missing = getMissingRequired(concrete);
+    if (missing.length > 0) {
+      return {
+        handled: true,
+        response: getParamPrompt(missing[0])
+      };
+    }
+
+    const workflowResult = await executeWorkflow(concrete, obj, input);
+    return handleExecutionResult(concrete, obj, workflowResult);
+  }
+
   if (obj.workflowState) {
     const activeState = obj.workflowState;
     const activeScore = scoreWorkflowMatch(input, activeState.workflow);
@@ -401,7 +555,44 @@ async function handleWorkflowInput(input, obj) {
 
   const match = findWorkflowMatch(input, obj);
   if (!match) {
-    return { handled: false };
+    const sendIntent = extractGenericSendIntent(input);
+    if (!sendIntent) {
+      return { handled: false };
+    }
+
+    const sendOptions = getSendWorkflowCandidates(obj);
+    if (sendOptions.length === 0) {
+      return { handled: false };
+    }
+
+    if (sendOptions.length === 1) {
+      const single = initializeWorkflowState({ plugin: sendOptions[0].plugin, workflow: sendOptions[0].workflow });
+      prefillByIntent(single, sendIntent);
+      obj.workflowState = single;
+
+      const missing = getMissingRequired(single);
+      if (missing.length > 0) {
+        return {
+          handled: true,
+          response: getParamPrompt(missing[0])
+        };
+      }
+
+      const workflowResult = await executeWorkflow(single, obj, input);
+      return handleExecutionResult(single, obj, workflowResult);
+    }
+
+    obj.workflowState = {
+      type: "workflow_channel_selection",
+      startedAt: Date.now(),
+      sendIntent,
+      options: sendOptions
+    };
+
+    return {
+      handled: true,
+      response: `How would you like to send this message? ${describeSendWorkflowOptions(sendOptions)}`
+    };
   }
 
   return await startNewWorkflow(match, input, obj);

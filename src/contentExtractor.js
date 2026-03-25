@@ -1,32 +1,48 @@
-/**
- * Content Extractor for social media links and web content
- * Handles: YouTube, Instagram, Twitter/X, Facebook, TikTok, generic links
- */
-
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
 
-/**
- * Fetch content from a URL with timeout and error handling
- */
-function fetchUrl(urlString, timeoutMs = 8000) {
+function fetchUrl(urlString, timeoutMs = 8000, redirectCount = 0) {
   return new Promise((resolve, reject) => {
     try {
       const urlObj = new URL(urlString);
       const protocol = urlObj.protocol === "https:" ? https : http;
+      const options = {
+        timeout: timeoutMs,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9"
+        }
+      };
 
-      const req = protocol.get(urlString, { timeout: timeoutMs }, (res) => {
-        let data = "";
+      const req = protocol.get(urlString, options, (res) => {
+        const status = Number(res.statusCode || 0);
+        const location = res.headers?.location;
+
+        if (status >= 300 && status < 400 && location) {
+          if (redirectCount >= 5) {
+            reject(new Error("Too many redirects"));
+            return;
+          }
+
+          const nextUrl = new URL(location, urlString).toString();
+          res.resume();
+          fetchUrl(nextUrl, timeoutMs, redirectCount + 1).then(resolve).catch(reject);
+          return;
+        }
+
+        const chunks = [];
+        let totalBytes = 0;
         res.on("data", (chunk) => {
-          data += chunk;
-          // Limit response size to 2MB to handle large social pages safely.
-          if (data.length > 2 * 1024 * 1024) {
+          chunks.push(chunk);
+          totalBytes += chunk.length;
+          if (totalBytes > 2 * 1024 * 1024) {
             req.destroy();
             reject(new Error("Response too large"));
           }
         });
-        res.on("end", () => resolve(data));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
       });
 
       req.on("timeout", () => {
@@ -41,34 +57,43 @@ function fetchUrl(urlString, timeoutMs = 8000) {
   });
 }
 
-/**
- * Extract meta tags from HTML
- */
+
 function extractMetaTags(html) {
   const tags = {};
-  const ogRegex = /<meta\s+property="og:([^"]+)"\s+content="([^"]*)"/gi;
-  const metaRegex = /<meta\s+name="([^"]+)"\s+content="([^"]*)"/gi;
+  const metaTagRegex = /<meta\s+[^>]*>/gi;
 
-  let match;
-  while ((match = ogRegex.exec(html)) !== null) {
-    tags[`og:${match[1]}`] = match[2];
-  }
-  while ((match = metaRegex.exec(html)) !== null) {
-    tags[match[1]] = match[2];
+  let tagMatch;
+  while ((tagMatch = metaTagRegex.exec(html)) !== null) {
+    const tag = tagMatch[0];
+    const attrs = {};
+    const attrRegex = /([a-zA-Z_:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^"'\s>]+))/g;
+
+    let attrMatch;
+    while ((attrMatch = attrRegex.exec(tag)) !== null) {
+      const key = String(attrMatch[1] || "").toLowerCase();
+      const val = attrMatch[2] || attrMatch[3] || attrMatch[4] || "";
+      attrs[key] = val;
+    }
+
+    const content = attrs.content || "";
+    if (!content) continue;
+
+    if (attrs.property) {
+      tags[String(attrs.property).toLowerCase()] = decodeXMLEntities(content);
+    }
+    if (attrs.name) {
+      tags[String(attrs.name).toLowerCase()] = decodeXMLEntities(content);
+    }
   }
 
-  // Extract title if present
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
   if (titleMatch && !tags.title) {
-    tags.title = titleMatch[1];
+    tags.title = decodeXMLEntities(titleMatch[1]);
   }
 
   return tags;
 }
 
-/**
- * Extract YouTube video ID from URL
- */
 function extractYouTubeId(urlString) {
   try {
     const url = new URL(urlString);
@@ -82,9 +107,6 @@ function extractYouTubeId(urlString) {
   return null;
 }
 
-/**
- * Extract Instagram post/reel ID from URL
- */
 function extractInstagramId(urlString) {
   try {
     const match = urlString.match(/(?:instagram\.com|instagr\.am)\/(?:p|reel)\/([A-Za-z0-9_-]+)/i);
@@ -93,9 +115,7 @@ function extractInstagramId(urlString) {
   return null;
 }
 
-/**
- * Extract Twitter/X tweet ID from URL
- */
+
 function extractTwitterId(urlString) {
   try {
     const match = urlString.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/i);
@@ -104,9 +124,7 @@ function extractTwitterId(urlString) {
   return null;
 }
 
-/**
- * Detect platform from URL
- */
+
 function detectPlatform(urlString) {
   try {
     const url = new URL(urlString);
@@ -123,15 +141,12 @@ function detectPlatform(urlString) {
   return "generic";
 }
 
-/**
- * Extract YouTube video metadata and transcript
- */
+
 async function extractYouTubeContent(urlString) {
   const videoId = extractYouTubeId(urlString);
   if (!videoId) return null;
 
   try {
-    // Fetch video page to get metadata
     const html = await fetchUrl(`https://www.youtube.com/watch?v=${videoId}`, 8000);
     const metaTags = extractMetaTags(html);
 
@@ -145,12 +160,10 @@ async function extractYouTubeContent(urlString) {
       duration: extractYouTubeDuration(html)
     };
 
-    // Try to fetch transcript if available
     try {
       const transcript = await fetchYouTubeTranscript(videoId);
       content.transcript = transcript;
     } catch (_) {
-      // Transcript not available, that's okay
     }
 
     return content;
@@ -160,9 +173,6 @@ async function extractYouTubeContent(urlString) {
   }
 }
 
-/**
- * Extract duration from YouTube HTML
- */
 function extractYouTubeDuration(html) {
   const durationMatch = html.match(/"duration":"(\d+)"/);
   if (durationMatch) {
@@ -174,13 +184,9 @@ function extractYouTubeDuration(html) {
   return null;
 }
 
-/**
- * Fetch YouTube caption/transcript using a free API
- * Note: This is a best-effort attempt; YouTube transcripts may not always be available
- */
+
 async function fetchYouTubeTranscript(videoId) {
   try {
-    // Use a simple approach: fetch captions info from YouTube
     const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`;
     const response = await fetchUrl(url, 5000);
 
@@ -196,16 +202,12 @@ async function fetchYouTubeTranscript(videoId) {
       .filter((text) => text.trim())
       .join(" ");
 
-    return transcript.substring(0, 2000); // Limit to 2000 chars for storage
+    return transcript.substring(0, 2000);
   } catch (err) {
-    // Transcript API may not be available for all videos
     return null;
   }
 }
 
-/**
- * Decode XML entities
- */
 function decodeXMLEntities(str) {
   const entities = {
     "&amp;": "&",
@@ -218,9 +220,134 @@ function decodeXMLEntities(str) {
   return str.replace(/&[a-zA-Z]+;/g, (match) => entities[match] || match);
 }
 
-/**
- * Extract Instagram content (basic metadata via OG tags)
- */
+function stripHtmlToText(html) {
+  if (!html) return "";
+
+  return decodeXMLEntities(
+    html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+function cleanBoilerplateText(text) {
+  if (!text) return "";
+
+  const noisyPhrases = [
+    /skip\s+to\s+content/gi,
+    /today'?s\s+paper/gi,
+    /newsletter(s)?/gi,
+    /sign\s+in/gi,
+    /subscribe/gi,
+    /advertisement/gi,
+    /all rights reserved/gi,
+    /privacy policy/gi,
+    /terms of use/gi,
+    /cookie(s)?/gi
+  ];
+
+  let cleaned = text;
+  for (const phrase of noisyPhrases) {
+    cleaned = cleaned.replace(phrase, " ");
+  }
+
+  return cleaned.replace(/\s+/g, " ").trim();
+}
+
+function extractJsonLdArticleBody(html) {
+  if (!html) return "";
+
+  const scriptRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match;
+
+  while ((match = scriptRegex.exec(html)) !== null) {
+    const jsonText = (match[1] || "").trim();
+    if (!jsonText) continue;
+
+    try {
+      const parsed = JSON.parse(jsonText);
+      const entries = Array.isArray(parsed) ? parsed : [parsed];
+
+      for (const entry of entries) {
+        if (!entry || typeof entry !== "object") continue;
+
+        if (entry.articleBody && typeof entry.articleBody === "string") {
+          const text = cleanBoilerplateText(entry.articleBody);
+          if (text.length > 200) return text;
+        }
+
+        if (entry["@graph"] && Array.isArray(entry["@graph"])) {
+          for (const node of entry["@graph"]) {
+            if (node && typeof node.articleBody === "string") {
+              const graphText = cleanBoilerplateText(node.articleBody);
+              if (graphText.length > 200) return graphText;
+            }
+          }
+        }
+      }
+    } catch (_) {
+      continue;
+    }
+  }
+
+  return "";
+}
+
+function extractBestArticleTextFromHtml(html) {
+  if (!html) return "";
+
+  const articleBodyFromJsonLd = extractJsonLdArticleBody(html);
+  if (articleBodyFromJsonLd) {
+    return articleBodyFromJsonLd.substring(0, 7000);
+  }
+
+  const scopedBlocks = [];
+  const containerRegexes = [
+    /<article[^>]*>([\s\S]*?)<\/article>/gi,
+    /<main[^>]*>([\s\S]*?)<\/main>/gi,
+    /<div[^>]*(?:id|class)=["'][^"']*(?:article|story|content|post|entry|main|body)[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi
+  ];
+
+  for (const regex of containerRegexes) {
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      if (match[1]) scopedBlocks.push(match[1]);
+    }
+  }
+
+  const sourceHtml = scopedBlocks.length ? scopedBlocks.join("\n") : html;
+  const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+  const candidates = [];
+  let paragraphMatch;
+
+  while ((paragraphMatch = paragraphRegex.exec(sourceHtml)) !== null) {
+    const text = cleanBoilerplateText(stripHtmlToText(paragraphMatch[1] || ""));
+    if (text.length < 60) continue;
+
+    const sentenceLikeCount = (text.match(/[.!?]\s/g) || []).length;
+    const keywordBoost = /(said|according|study|report|health|video|official|research|court|police|doctor|patient|government)/i.test(text) ? 1 : 0;
+    const score = Math.min(text.length, 400) + sentenceLikeCount * 25 + keywordBoost * 35;
+    candidates.push({ text, score });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates.slice(0, 8).map((c) => c.text);
+  const combined = cleanBoilerplateText(top.join(" "));
+
+  if (combined.length > 180) {
+    return combined.substring(0, 7000);
+  }
+
+  const fallbackBodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const fallbackText = cleanBoilerplateText(stripHtmlToText(fallbackBodyMatch ? fallbackBodyMatch[1] : html));
+  return fallbackText.substring(0, 5000);
+}
+
 async function extractInstagramContent(urlString) {
   try {
     const html = await fetchUrl(urlString, 8000);
@@ -240,9 +367,6 @@ async function extractInstagramContent(urlString) {
   }
 }
 
-/**
- * Extract Twitter/X content (basic metadata via OG tags)
- */
 async function extractTwitterContent(urlString) {
   try {
     const html = await fetchUrl(urlString, 8000);
@@ -262,17 +386,11 @@ async function extractTwitterContent(urlString) {
   }
 }
 
-/**
- * Extract Twitter author from HTML
- */
 function extractTwitterAuthor(html) {
   const match = html.match(/<meta\s+name="twitter:creator"\s+content="([^"]+)"/i);
   return match ? match[1] : null;
 }
 
-/**
- * Extract Facebook content (basic metadata via OG tags)
- */
 async function extractFacebookContent(urlString) {
   try {
     const html = await fetchUrl(urlString, 8000);
@@ -292,9 +410,7 @@ async function extractFacebookContent(urlString) {
   }
 }
 
-/**
- * Extract TikTok content (basic metadata via OG tags)
- */
+
 async function extractTikTokContent(urlString) {
   try {
     const html = await fetchUrl(urlString, 8000);
@@ -314,45 +430,24 @@ async function extractTikTokContent(urlString) {
   }
 }
 
-/**
- * Extract TikTok author from HTML
- */
 function extractTikTokAuthor(html) {
   const match = html.match(/"author":"([^"]+)"/);
   return match ? match[1] : null;
 }
 
-/**
- * Extract generic web content (title, description, main text)
- */
 async function extractGenericContent(urlString) {
   try {
     const html = await fetchUrl(urlString, 8000);
     const metaTags = extractMetaTags(html);
 
-    // Extract main text content (very basic)
-    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    let mainText = "";
-
-    if (bodyMatch) {
-      // Remove scripts and styles
-      let cleanHtml = bodyMatch[1]
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ");
-
-      // Decode entities and clean up
-      mainText = decodeXMLEntities(cleanHtml)
-        .replace(/\s+/g, " ")
-        .trim()
-        .substring(0, 1500); // Limit to 1500 chars
-    }
+    const mainText = extractBestArticleTextFromHtml(html);
+    const cleanDescription = cleanBoilerplateText(metaTags["og:description"] || metaTags["description"] || "");
 
     return {
       platform: "generic",
       url: urlString,
       title: metaTags["og:title"] || metaTags["title"] || "",
-      description: metaTags["og:description"] || metaTags["description"] || "",
+      description: cleanDescription,
       content: mainText,
       image: metaTags["og:image"] || ""
     };
@@ -362,9 +457,6 @@ async function extractGenericContent(urlString) {
   }
 }
 
-/**
- * Extract all links from text message
- */
 function extractLinksFromText(text) {
   if (!text) return [];
 
@@ -372,10 +464,9 @@ function extractLinksFromText(text) {
   const matches = text.match(urlRegex) || [];
 
   return matches.map((url) => {
-    // Clean up trailing punctuation
     url = url.replace(/[.,!?;:)'"]+$/, "");
     try {
-      new URL(url); // Validate URL
+      new URL(url);
       return url;
     } catch (_) {
       return null;
@@ -383,9 +474,6 @@ function extractLinksFromText(text) {
   }).filter(Boolean);
 }
 
-/**
- * Main function: Extract content from URL
- */
 async function extractContent(urlString) {
   if (!urlString) return null;
 
@@ -412,9 +500,6 @@ async function extractContent(urlString) {
   }
 }
 
-/**
- * Generate a summary-friendly text from extracted content
- */
 function formatExtractedContent(content) {
   if (!content) return "";
 
@@ -437,8 +522,12 @@ function formatExtractedContent(content) {
   }
 
   if (content.content) {
-    // For generic web content
     parts.push(`Content: ${content.content.substring(0, 500)}...`);
+  }
+
+  if (!content.title && !content.description && !content.content && !content.transcript) {
+    parts.push(`URL: ${content.url || ""}`);
+    parts.push("No preview metadata available from source.");
   }
 
   return parts.join("\n");
