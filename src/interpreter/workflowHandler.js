@@ -268,6 +268,57 @@ function isMetaReply(input) {
   return /^(i just did|already did|you asked|i said|told you|yes|no|ok|okay|hmm|uh+|um+|yeah+|yep|nope)$/.test(normalized);
 }
 
+function isAuthoringHelpRequest(input) {
+  const normalized = String(input || "").trim().toLowerCase();
+  if (!normalized) return false;
+
+  return /(idk|i don't know|i dont know|not sure|suggest|help me write|what should i write|what to write|draft|generate|example|template)/i.test(normalized);
+}
+
+function parseDraftOptions(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const options = [];
+
+  for (const line of lines) {
+    const match = line.match(/^\s*Option\s*(\d{1,2})\s*:\s*(.+)$/i);
+    if (!match) continue;
+    const idx = Number(match[1]);
+    const value = String(match[2] || "").trim();
+    if (!value || idx <= 0) continue;
+    options[idx - 1] = value;
+  }
+
+  return options.filter(Boolean);
+}
+
+function selectDraftOptionIndex(input, maxLen) {
+  const raw = String(input || "").trim();
+  if (!raw || maxLen <= 0) return -1;
+
+  const numeric = raw.match(/(?:^|\b)(?:option\s*)?(\d{1,2})(?:\b|$)/i);
+  if (numeric) {
+    const idx = Number(numeric[1]) - 1;
+    if (idx >= 0 && idx < maxLen) return idx;
+  }
+
+  const normalized = raw.toLowerCase();
+  const wordMap = {
+    first: 0,
+    second: 1,
+    third: 2,
+    fourth: 3,
+    fifth: 4
+  };
+
+  for (const [word, idx] of Object.entries(wordMap)) {
+    if (new RegExp(`\\b${word}\\b`, "i").test(normalized) && idx < maxLen) {
+      return idx;
+    }
+  }
+
+  return -1;
+}
+
 function emailLike(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
@@ -284,6 +335,7 @@ function applySingleMissingFallback(state, input, extractedValues) {
   const param = missing[0];
   const raw = String(input || "").trim();
   if (!raw || isMetaReply(raw)) return;
+  if (isAuthoringHelpRequest(raw) && /^(string|text)?$/i.test(String(param.type || "string"))) return;
 
   if (param.type === "email") {
     if (!emailLike(raw)) return;
@@ -292,6 +344,81 @@ function applySingleMissingFallback(state, input, extractedValues) {
   }
 
   state.params[param.name] = raw;
+}
+
+async function maybeProvideDraftSuggestion(state, input, obj) {
+  const missing = getMissingRequired(state);
+  if (missing.length !== 1) return null;
+  if (!isAuthoringHelpRequest(input)) return null;
+
+  const param = missing[0];
+  const type = String(param.type || "string").toLowerCase();
+  if (type !== "string" && type !== "text" && type !== "") return null;
+
+  const visibleCurrentParams = {};
+  for (const p of [...state.workflow.required_params, ...state.workflow.optional_params]) {
+    const v = state.params[p.name];
+    if (v !== undefined && v !== null && v !== "") {
+      visibleCurrentParams[p.name] = v;
+    }
+  }
+
+  const prompt =
+`You are helping a user fill one missing workflow parameter.
+Return plain text only.
+
+Workflow: ${state.workflow.name}
+Description: ${state.workflow.description || ""}
+Missing field: ${param.name}
+Field description: ${param.description || ""}
+Collected fields: ${JSON.stringify(visibleCurrentParams)}
+User message: ${JSON.stringify(String(input || ""))}
+
+Generate 2 concise draft options for the missing field.
+Format exactly:
+Option 1: <text>
+Option 2: <text>
+
+Then add one line:
+Reply with the option number or edit one.
+`;
+
+  try {
+    const raw = await obj.customQuery(prompt);
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    const options = parseDraftOptions(text);
+    return {
+      message: text,
+      options,
+      field: param.name
+    };
+  } catch (_) {
+    const fallbackMessage = `I can help draft this.\nOption 1: ${param.name} update message\nOption 2: Quick, polite ${param.name} message\nReply with the option number or edit one.`;
+    return {
+      message: fallbackMessage,
+      options: parseDraftOptions(fallbackMessage),
+      field: param.name
+    };
+  }
+}
+
+function applyDraftSelectionIfPresent(state, input) {
+  const draft = state?.draftSuggestion;
+  if (!draft || !Array.isArray(draft.options) || draft.options.length === 0) return { applied: false };
+
+  const idx = selectDraftOptionIndex(input, draft.options.length);
+  if (idx < 0) return { applied: false };
+
+  const field = String(draft.field || "").trim();
+  if (!field) return { applied: false };
+
+  const selectedText = String(draft.options[idx] || "").trim();
+  if (!selectedText) return { applied: false };
+
+  state.params[field] = selectedText;
+  state.draftSuggestion = null;
+  return { applied: true };
 }
 
 async function extractParamsWithLLM(input, state, obj) {
@@ -369,6 +496,7 @@ function initializeWorkflowState(match) {
     plugin: match.plugin,
     workflow: match.workflow,
     params,
+    draftSuggestion: null,
     startedAt: Date.now()
   };
 }
@@ -439,6 +567,22 @@ function handleExecutionResult(state, obj, workflowResult) {
 
 async function continueActiveWorkflow(input, obj) {
   const state = obj.workflowState;
+
+  const draftSelection = applyDraftSelectionIfPresent(state, input);
+  if (draftSelection.applied) {
+    await applyPluginPrefill(state, obj, input);
+    const missingAfterDraft = getMissingRequired(state);
+    if (missingAfterDraft.length > 0) {
+      return {
+        handled: true,
+        response: getParamPrompt(missingAfterDraft[0])
+      };
+    }
+
+    const workflowResult = await executeWorkflow(state, obj, input);
+    return handleExecutionResult(state, obj, workflowResult);
+  }
+
   const extracted = await extractParamsWithLLM(input, state, obj);
 
   if (extracted.intent === "cancel" && isExplicitCancelIntent(input)) {
@@ -450,6 +594,18 @@ async function continueActiveWorkflow(input, obj) {
   }
 
   mergeExtractedParams(state, extracted.values);
+  const suggestion = await maybeProvideDraftSuggestion(state, input, obj);
+  if (suggestion) {
+    state.draftSuggestion = {
+      field: suggestion.field,
+      options: Array.isArray(suggestion.options) ? suggestion.options : [],
+      createdAt: Date.now()
+    };
+    return {
+      handled: true,
+      response: suggestion.message
+    };
+  }
   applySingleMissingFallback(state, input, extracted.values);
   await applyPluginPrefill(state, obj, input);
 
@@ -479,6 +635,18 @@ async function startNewWorkflow(match, input, obj) {
   }
 
   mergeExtractedParams(state, extracted.values);
+  const suggestion = await maybeProvideDraftSuggestion(state, input, obj);
+  if (suggestion) {
+    state.draftSuggestion = {
+      field: suggestion.field,
+      options: Array.isArray(suggestion.options) ? suggestion.options : [],
+      createdAt: Date.now()
+    };
+    return {
+      handled: true,
+      response: suggestion.message
+    };
+  }
   applySingleMissingFallback(state, input, extracted.values);
   await applyPluginPrefill(state, obj, input);
 
