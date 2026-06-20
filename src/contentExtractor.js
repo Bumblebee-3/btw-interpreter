@@ -2,58 +2,83 @@ const https = require("https");
 const http = require("http");
 const { URL } = require("url");
 
-function fetchUrl(urlString, timeoutMs = 8000, redirectCount = 0) {
+function fetchUrl(urlString, timeoutMs = 8000, redirectCount = 0, retries = 2) {
+  const RETRYABLE_ERRORS = ["ECONNRESET", "ETIMEDOUT", "EPIPE"];
   return new Promise((resolve, reject) => {
-    try {
-      const urlObj = new URL(urlString);
-      const protocol = urlObj.protocol === "https:" ? https : http;
-      const options = {
-        timeout: timeoutMs,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9"
-        }
-      };
+    const attempt = (attemptNum) => {
+      try {
+        const urlObj = new URL(urlString);
+        const protocol = urlObj.protocol === "https:" ? https : http;
+        const options = {
+          timeout: timeoutMs,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"
+          }
+        };
 
-      const req = protocol.get(urlString, options, (res) => {
-        const status = Number(res.statusCode || 0);
-        const location = res.headers?.location;
+        const req = protocol.get(urlString, options, (res) => {
+          const status = Number(res.statusCode || 0);
+          const location = res.headers?.location;
 
-        if (status >= 300 && status < 400 && location) {
-          if (redirectCount >= 5) {
-            reject(new Error("Too many redirects"));
+          if (status >= 300 && status < 400 && location) {
+            if (redirectCount >= 5) {
+              reject(new Error("Too many redirects"));
+              return;
+            }
+
+            const nextUrl = new URL(location, urlString).toString();
+            res.resume();
+            fetchUrl(nextUrl, timeoutMs, redirectCount + 1, retries).then(resolve).catch(reject);
             return;
           }
 
-          const nextUrl = new URL(location, urlString).toString();
-          res.resume();
-          fetchUrl(nextUrl, timeoutMs, redirectCount + 1).then(resolve).catch(reject);
-          return;
-        }
-
-        const chunks = [];
-        let totalBytes = 0;
-        res.on("data", (chunk) => {
-          chunks.push(chunk);
-          totalBytes += chunk.length;
-          if (totalBytes > 2 * 1024 * 1024) {
+          // If content-length header exists and indicates too large, abort early.
+          const contentLength = Number(res.headers["content-length"] || 0);
+          const MAX_BYTES = 2 * 1024 * 1024; // 2MB
+          if (contentLength && contentLength > MAX_BYTES) {
             req.destroy();
             reject(new Error("Response too large"));
+            return;
           }
+
+          const chunks = [];
+          let totalBytes = 0;
+          res.on("data", (chunk) => {
+            chunks.push(chunk);
+            totalBytes += chunk.length;
+            if (totalBytes > MAX_BYTES) {
+              req.destroy();
+              reject(new Error("Response too large"));
+            }
+          });
+          res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
         });
-        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-      });
 
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error("Request timeout"));
-      });
+        req.on("timeout", () => {
+          req.destroy();
+          const err = new Error("Request timeout");
+          err.code = "ETIMEDOUT";
+          req.emit("error", err);
+        });
 
-      req.on("error", reject);
-    } catch (err) {
-      reject(err);
-    }
+        req.on("error", (err) => {
+          const code = String(err.code || err.message || "");
+          const isRetryable = RETRYABLE_ERRORS.some(e => code.includes(e) || String(err.message || "").toLowerCase().includes("socket hang up"));
+          if (isRetryable && attemptNum < retries) {
+            const backoff = 250 * Math.pow(2, attemptNum);
+            setTimeout(() => attempt(attemptNum + 1), backoff);
+            return;
+          }
+          reject(err);
+        });
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    attempt(0);
   });
 }
 

@@ -22,6 +22,7 @@ config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key
 config.plugins.gmail.obj = intr;
 config.plugins.calendar.obj = intr;
 if (config.plugins.whatsapp) config.plugins.whatsapp.obj = intr;
+if (config.plugins.browser) config.plugins.browser.obj = intr;
 if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
   intr.initReminderSystem({
     storagePath: config.plugins.reminder.storage_path,
@@ -37,6 +38,9 @@ intr.loadPlugins("gmail",config.plugins.gmail,process.env.email);
 intr.loadPlugins("tavily",config.plugins.tavily);
 if (config.plugins.whatsapp && config.plugins.whatsapp.enabled === true) {
   intr.loadPlugins("whatsapp",config.plugins.whatsapp);
+}
+if (config.plugins.browser && config.plugins.browser.enabled === true) {
+  intr.loadPlugins("browser",config.plugins.browser);
 }
 if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
   intr.loadPlugins("reminder",config.plugins.reminder);

@@ -177,6 +177,59 @@ function findPluginFunction(plugins, pluginName, functionName) {
     return null;
 }
 
+function resolveBrowserDirectIntent(query, plugins) {
+    const text = normalizeText(query);
+    if (!text) return null;
+
+    const actionLike = /\b(open|go to|visit|navigate|click|press|tap|type|enter|fill|submit|close|exit|quit|scroll|focus|select|choose)\b/i.test(text);
+    const pageInspectLike = /\b(show links|list links|show buttons|list buttons|show inputs|inspect page|page elements|browser status|current page|current url)\b/i.test(text);
+    const hasUrl = /https?:\/\//i.test(String(query || ""));
+
+    if (!actionLike && !pageInspectLike && !hasUrl) {
+        return null;
+    }
+
+    const browserPlugin = (plugins || []).find(p => normalizeText(p?.data?.name) === "browser");
+    if (!browserPlugin) return null;
+
+    const fnName = pageInspectLike ? "getPageElements" : "controlBrowser";
+    const func = (browserPlugin?.data?.functions || []).find(f => normalizeText(f?.name) === normalizeText(fnName));
+    if (!func) return null;
+
+    return {
+        isPlugin: true,
+        plugin: browserPlugin,
+        function: func,
+        confidence: 0.99,
+        via: "browser_direct"
+    };
+}
+
+function resolveEmailDirectIntent(query, plugins) {
+    const text = normalizeText(query);
+    if (!text) return null;
+
+    const hasInboxOrMail = /\b(inbox|gmail|email|emails|mail|mails|mailbox)\b/i.test(text);
+    const hasEmailAsk = /\b(latest|recent|new|unread|from|subject|check|read|show|what)\b/i.test(text);
+    if (!hasInboxOrMail || !hasEmailAsk) {
+        return null;
+    }
+
+    const gmailPlugin = (plugins || []).find(p => normalizeText(p?.data?.name) === "gmail");
+    if (!gmailPlugin) return null;
+
+    const func = (gmailPlugin?.data?.functions || []).find(f => normalizeText(f?.name) === "getemails");
+    if (!func) return null;
+
+    return {
+        isPlugin: true,
+        plugin: gmailPlugin,
+        function: func,
+        confidence: 0.99,
+        via: "email_direct"
+    };
+}
+
 function resolveGuardedIntent(query, plugins) {
     let best = null;
 
@@ -298,6 +351,16 @@ Available functions: ${JSON.stringify(catalog)}
 }
 
 async function resolvePluginIntent(query, obj) {
+    const emailDirect = resolveEmailDirectIntent(query, obj?.plugins || []);
+    if (emailDirect) {
+        return emailDirect;
+    }
+
+    const browserDirect = resolveBrowserDirectIntent(query, obj?.plugins || []);
+    if (browserDirect) {
+        return browserDirect;
+    }
+
     const guarded = resolveGuardedIntent(query, obj?.plugins || []);
     if (guarded) {
         return guarded;

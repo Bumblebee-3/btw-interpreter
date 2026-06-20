@@ -151,8 +151,11 @@ await db.deleteTable("birthdays");
 
 TODO:
 
-[ ] Rewrite ./src/contentExtractor.js
-[ ] Check plugins/whatsapp/index.js
-[ ] Review Plugin and Workflow managers.
-[ ] Use an LLM instead of parseEmailDraftIntentFromInput() in /plugins/gmail/index.js
-[ ] Codex seems to have done a good job with ReminderManager, yet just check it once...
+[TODO:
+
+- [x] Add browser support.
+- [ ] Rewrite ./src/contentExtractor.js
+- [ ] Check plugins/whatsapp/index.js
+- [ ] Review Plugin and Workflow managers.
+- [ ] Use an LLM instead of parseEmailDraftIntentFromInput() in /plugins/gmail/index.js
+- [ ] Codex seems to have done a good job with ReminderManager, yet just check it once...

@@ -1,0 +1,201 @@
+{
+  "name": "Browser",
+  "description": "Control a live browser session: open pages, click links/buttons, type into fields, and submit forms",
+  "entrypoint": "index.js",
+  "plugin_params": [
+    "headless",
+    "user_data_dir",
+    "firefox_executable_path",
+    "obj"
+  ],
+  "functions": [
+    {
+      "name": "controlBrowser",
+      "description": "Execute browser control actions from natural language like open, click, type, submit, and scroll",
+      "async": true,
+      "requires_LLM": false,
+      "intent_guard": {
+        "enabled": true,
+        "priority": 95,
+        "min_score": 3,
+        "min_confidence": 0.35,
+        "min_token_ratio": 0.5,
+        "keywords": [
+          "open website",
+          "open link",
+          "visit website",
+          "navigate to",
+          "click button",
+          "click link",
+          "fill form",
+          "type into",
+          "submit form",
+          "close browser",
+          "browser"
+        ]
+      },
+      "output_format": "Plain text action result confirming the browser action and target.",
+      "keywords": [
+        "open",
+        "visit",
+        "navigate",
+        "go to",
+        "open that link",
+        "open this link",
+        "browser",
+        "website",
+        "click",
+        "press",
+        "link",
+        "button",
+        "select password",
+        "focus password",
+        "select username",
+        "focus input",
+        "type",
+        "enter",
+        "fill",
+        "textbox",
+        "input",
+        "submit",
+        "go back",
+        "previous page",
+        "back",
+        "scroll down",
+        "scroll up",
+        "form",
+        "close",
+        "exit browser",
+        "quit browser",
+        "scroll"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    },
+    {
+      "name": "getPageElements",
+      "description": "List visible links, buttons, and form input fields on current page",
+      "async": true,
+      "requires_LLM": false,
+      "output_format": {
+        "url": "Current page URL",
+        "title": "Current page title",
+        "links": [
+          {
+            "text": "Link text",
+            "href": "Full URL"
+          }
+        ],
+        "buttons": [
+          {
+            "text": "Button text"
+          }
+        ],
+        "inputs": [
+          {
+            "name": "Input name",
+            "id": "Input id",
+            "placeholder": "Placeholder",
+            "type": "Input type"
+          }
+        ]
+      },
+      "keywords": [
+        "list links",
+        "show links",
+        "list buttons",
+        "show buttons",
+        "show inputs",
+        "inspect page",
+        "what can i click",
+        "page elements"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    },
+    {
+      "name": "getBrowserStatus",
+      "description": "Show current browser status including URL and page title",
+      "async": true,
+      "requires_LLM": false,
+      "output_format": {
+        "initialized": "boolean",
+        "headless": "boolean",
+        "current_url": "string",
+        "title": "string"
+      },
+      "keywords": [
+        "browser status",
+        "current page",
+        "where am i",
+        "current url",
+        "page title"
+      ],
+      "requires": [
+        "$INPUT"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "name": "browser_action",
+      "description": "Perform browser actions interactively with parameter collection",
+      "keywords": [
+        "browser action workflow",
+        "start browser workflow",
+        "interactive browser workflow",
+        "browser automation workflow",
+        "step by step browser control",
+        "multi step browser action",
+        "collect browser parameters"
+      ],
+      "required_params": [
+        {
+          "name": "action",
+          "description": "Which action should I do? (open/click/type/submit/back/close/scroll/inspect)",
+          "type": "string"
+        }
+      ],
+      "optional_params": [
+        {
+          "name": "url",
+          "description": "Website URL for open action",
+          "type": "string"
+        },
+        {
+          "name": "target",
+          "description": "CSS selector or visible text target for click/type/submit",
+          "type": "string"
+        },
+        {
+          "name": "text",
+          "description": "Text value for type action",
+          "type": "string"
+        },
+        {
+          "name": "element_type",
+          "description": "Optional target type for click (link/button/any)",
+          "type": "string"
+        },
+        {
+          "name": "amount",
+          "description": "Scroll distance in pixels",
+          "type": "number"
+        },
+        {
+          "name": "direction",
+          "description": "Scroll direction (up or down)",
+          "type": "string"
+        },
+        {
+          "name": "submit",
+          "description": "Whether typing should auto-submit",
+          "type": "boolean"
+        }
+      ],
+      "execute": "executeBrowserWorkflow"
+    }
+  ]
+}

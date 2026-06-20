@@ -49,7 +49,9 @@ if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
   intr.loadPlugins("reminder", config.plugins.reminder);
 }
 intr.loadDB(config.rag.location, config.rag.table_limit);
-
+if (config.plugins.browser && config.plugins.browser.enabled === true) {
+  intr.loadPlugins("browser",config.plugins.browser);
+}
 const readline = require("readline").createInterface({ input: process.stdin, output: process.stdout });
 let isClosed = false;
 

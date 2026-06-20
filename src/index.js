@@ -38,6 +38,7 @@ class Interpreter {
             else if(location=="gmail"){location=__dirname+"/plugins/gmail/plugindata.json";location=location.replace("/src/","/");try{const { google } = require("googleapis");}catch(err){console.log("Please install googleapis via npm.");process.exit(0);}}
             else if (location=="tavily"){location=__dirname+"/plugins/tavily/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="weather"){location=__dirname+"/plugins/weather/plugindata.json";location=location.replace("/src/","/")}
+            else if(location=="browser"){location=__dirname+"/plugins/browser/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="whatsapp"){location=__dirname+"/plugins/whatsapp/plugindata.json";location=location.replace("/src/","/");try{const b = require("baileys");if(!b){throw new Error("missing");}}catch(err){console.log("Please install baileys via npm.");process.exit(0);}}
             else if(location=="reminder"){location=__dirname+"/plugins/reminder/plugindata.json";location=location.replace("/src/","/")}
             const resolvedPath = path.resolve(location);
@@ -58,6 +59,9 @@ class Interpreter {
             if (obj.data.plugin_params && Array.isArray(obj.data.plugin_params)) {
                 for (let i = 0; i < obj.data.plugin_params.length; i++) {
                     const paramName = obj.data.plugin_params[i];
+                    if (paramName === "obj") {
+                        continue;
+                    }
                     if (!(paramName in params)) throw new Error(`Mismatch: Missing required plugin parameter: ${paramName}`);
                 }
             }

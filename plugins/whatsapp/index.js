@@ -4,6 +4,7 @@ const baileys = require("baileys");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
 const { extractContent, extractLinksFromText, formatExtractedContent, detectPlatform } = require("../../src/contentExtractor");
+const messageHistory = require("../../src/messageHistory");
 
 if (!global.__btwLibsignalNoiseFilterInstalled) {
   global.__btwLibsignalNoiseFilterInstalled = true;
@@ -893,13 +894,43 @@ function selectLinkFromContextByInput(ctx, input) {
   const raw = normalizeText(input);
   if (!raw) return links[links.length - 1] || null;
 
+  const wantsAlternate = /\b(other|another|next|different|else)\b/i.test(raw);
+  if (wantsAlternate) {
+    const last = ctx?.lastSelectedLink || null;
+    const requestedInstagram = /\b(instagram|insta|reel|ig|post)\b/i.test(raw);
+    const requestedFacebook = /\b(facebook|fb)\b/i.test(raw);
+    const requestedTwitter = /\b(twitter|tweet|x)\b/i.test(raw);
+    const requestedYoutube = /\b(youtube|yt|video)\b/i.test(raw);
+
+    let preferredPlatform = "";
+    if (requestedInstagram) preferredPlatform = "instagram";
+    else if (requestedFacebook) preferredPlatform = "facebook";
+    else if (requestedTwitter) preferredPlatform = "twitter";
+    else if (requestedYoutube) preferredPlatform = "youtube";
+    else preferredPlatform = String(last?.platform || "").toLowerCase();
+
+    const normalizedLast = normalizeUrlForMatch(last?.url || "");
+    const reversed = [...links].slice().reverse();
+    const candidates = preferredPlatform
+      ? reversed.filter(l => String(l?.platform || "").toLowerCase() === preferredPlatform)
+      : reversed;
+
+    for (const candidate of candidates) {
+      const normalized = normalizeUrlForMatch(candidate?.url || "");
+      if (!normalized) continue;
+      if (!normalizedLast || normalized !== normalizedLast) {
+        return candidate;
+      }
+    }
+  }
+
   const tokens = tokenizeForLookup(raw);
 
   if (/\b(youtube|yt|video)\b/i.test(raw)) {
     const found = links.find(l => String(l.platform || "").toLowerCase() === "youtube" || /youtube|youtu\.be/i.test(String(l.url || "")));
     if (found) return found;
   }
-  if (/\b(facebook|fb|post)\b/i.test(raw)) {
+  if (/\b(facebook|fb)\b/i.test(raw)) {
     const found = links.find(l => String(l.platform || "").toLowerCase() === "facebook" || /facebook|fb\.com/i.test(String(l.url || "")));
     if (found) return found;
   }
@@ -908,6 +939,11 @@ function selectLinkFromContextByInput(ctx, input) {
     if (found) return found;
   }
   if (/\b(instagram|insta|reel|ig)\b/i.test(raw)) {
+    const found = links.find(l => String(l.platform || "").toLowerCase() === "instagram" || /instagram/i.test(String(l.url || "")));
+    if (found) return found;
+  }
+
+  if (/\bpost\b/i.test(raw)) {
     const found = links.find(l => String(l.platform || "").toLowerCase() === "instagram" || /instagram/i.test(String(l.url || "")));
     if (found) return found;
   }
@@ -1121,8 +1157,22 @@ async function answerFromRecentSummaryContext(obj, input) {
   const hasSummaryAsk = /\b(summarise|summarize|summary|explain)\b/.test(normalizedInput);
   const hasAboutSourceAsk = /\b(what about|tell me about|about that|about the)\b/.test(normalizedInput) && hasSourceMention;
   const isShortSourceReference = hasSourceMention && normalizedInput.split(" ").filter(Boolean).length <= 7;
+  const hasOpenVerb = /\b(open|visit|go to|navigate to|launch)\b/.test(normalizedInput);
+  const hasReferencePointer = /\b(first|second|third|fourth|fifth|one|it|that|this|other|another|next)\b/.test(normalizedInput);
+  const hasOpenIntent = hasOpenVerb && (hasSourceMention || hasReferencePointer) && mergedLinks.length > 0;
   const shouldUsePreviousSource = depthFollowUp && !hasSourceMention;
   const wantsDirectSourceSummary = (hasSourceMention && (hasSummaryAsk || hasAboutSourceAsk || isShortSourceReference)) || shouldUsePreviousSource;
+
+  if (hasOpenIntent) {
+    const selectedLink = selectLinkFromContextByInput({ ...ctx, links: mergedLinks }, input);
+    if (selectedLink && selectedLink.url) {
+      ctx.lastSelectedLink = selectedLink;
+      return {
+        handled: false,
+        rewrittenQuery: `open ${selectedLink.url}`
+      };
+    }
+  }
 
   if (wantsDirectSourceSummary) {
     const selectedLink = shouldUsePreviousSource
@@ -1231,6 +1281,19 @@ function ingestMessageToHistory(msg) {
   processLinksInMessage(jid, text, sender, timestamp).catch(() => {
     // Silently fail - link extraction is best-effort
   });
+
+  try {
+    messageHistory.addMessage({
+      source: 'whatsapp',
+      id: id || `${jid}_${timestamp}`,
+      sourceId: id || '',
+      threadId: jid,
+      text,
+      links: extractLinksFromText(text),
+      timestamp,
+      meta: { sender, fromMe }
+    });
+  } catch (_) {}
 
   schedulePersistCache();
 }
@@ -1583,6 +1646,9 @@ async function ensureSocket(authPath) {
           // Do not reconnect on logged-out or conflict loops.
           if (loggedOut || conflict) {
             clearReconnectTimer();
+            if (conflict) {
+              console.log("[WhatsApp] Session conflict detected. To recover: either close other WhatsApp clients, or run the helper 'WhatsAppPlugin.clearAuthAndRelink(authPath)' to remove local auth and scan the QR code to relink.");
+            }
           } else {
             scheduleReconnect(resolvedAuth);
           }
@@ -2507,5 +2573,28 @@ Messages:\n${messages.join("\n")}${formatLinksForPrompt(selected.id)}
     }
   }
 }
+
+// Utility to clear stored auth and relink. Use with caution: this removes saved auth files.
+WhatsAppPlugin.clearAuthAndRelink = async function(authPath) {
+  try {
+    const resolvedAuth = path.resolve(authPath || path.join(process.cwd(), "plugins", "whatsapp", "auth"));
+    if (fs.existsSync(resolvedAuth)) {
+      fs.rmSync(resolvedAuth, { recursive: true, force: true });
+      console.log(`[WhatsApp] Cleared auth directory: ${resolvedAuth}`);
+    }
+    const cachePath = getCachePathFromAuthPath(resolvedAuth);
+    try { if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath); } catch (_) {}
+    // Reset singleton state
+    singleton.socket = null;
+    singleton.connectionState = "closed";
+    singleton.reconnectAttempts = 0;
+    singleton.cacheLoaded = false;
+    console.log("[WhatsApp] Attempting to re-establish socket. You will need to scan the QR code.");
+    return await ensureSocket(authPath);
+  } catch (err) {
+    console.error("[WhatsApp] Failed to clear auth and relink:", err?.message || err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+};
 
 module.exports = WhatsAppPlugin;

@@ -1,0 +1,32 @@
+{
+  "messages": [
+    {
+      "id": "19e15e400ad86458",
+      "source": "gmail",
+      "sourceId": "19e15e400ad86458",
+      "threadId": "19e15e400ad86458",
+      "text": "Save up to 25% on Parcel 3-Wheeler - 96 Deliver large parcels for less with Uber Parcel. &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &#847; &shy; &#84",
+      "links": [],
+      "timestamp": 1778483721,
+      "meta": {
+        "from": "Uber <uber@uber.com>",
+        "to": "<hridhuun@gmail.com>"
+      }
+    },
+    {
+      "id": "19e1637f8ad0f7b7",
+      "source": "gmail",
+      "sourceId": "19e1637f8ad0f7b7",
+      "threadId": "19e1637f8ad0f7b7",
+      "text": "Security alert - [image: Google] A new sign-in on Linux hridhuun@gmail.com We noticed a new sign-in to your Google Account on a Linux device. If this was you, you don’t need to do anything. If not, we’ll help you secure your account. Check activity You can also see security activity at https://myaccount.google.com/notifications You received this email to let you know about important changes to your Google Account and services. © 2026 Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA",
+      "links": [
+        "https://myaccount.google.com/notifications"
+      ],
+      "timestamp": 1778489225,
+      "meta": {
+        "from": "Google <no-reply@accounts.google.com>",
+        "to": "hridhuun@gmail.com"
+      }
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 const fs = require("fs");
 const { google } = require("googleapis");
+const messageHistory = require("../../src/messageHistory");
 
 function isEmail(value) {return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim())}
 function normalizeText(value) {
@@ -131,6 +132,8 @@ function recipientMatchScore(query, name, email) {
 
     return score;
 }
+
+
 
 
 function decodeBase64(data) {
@@ -332,7 +335,10 @@ User request:
 "${query}"
 `;
 
+
         let raw = await this.obj.customQuery(prompt);
+
+
 
         try {
             const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -384,6 +390,7 @@ User request:
             messages = retry.data.messages || [];
         }
 
+
         const emails = [];
         const MAX_BODY_CHARS = 800;
 
@@ -405,7 +412,7 @@ User request:
             let body = extractBody(payload);
             body = stripHtml(body).slice(0, MAX_BODY_CHARS);
 
-            emails.push({
+            const emailObj = {
                 threadId: full.data.threadId,
                 from: getHeader("From"),
                 to: getHeader("To"),
@@ -413,15 +420,44 @@ User request:
                 date: getHeader("Date"),
                 snippet: full.data.snippet,
                 body
-            });
+            };
+
+            emails.push(emailObj);
+
+            try {
+                const links = (String(body || "").match(/https?:\/\/[^\s)"']+/g) || []).slice(0, 10);
+                const ts = (() => {
+                    const d = new Date(getHeader("Date") || Date.now());
+                    const v = Number.isFinite(d.getTime()) ? Math.floor(d.getTime() / 1000) : Math.floor(Date.now() / 1000);
+                    return v;
+                })();
+
+                messageHistory.addMessage({
+                    source: 'gmail',
+                    id: String(full.data.id || msg.id || ''),
+                    sourceId: String(msg.id || ''),
+                    threadId: full.data.threadId,
+                    text: emailObj.subject ? `${emailObj.subject} - ${emailObj.body}` : emailObj.body || emailObj.snippet || '',
+                    links,
+                    timestamp: ts,
+                    meta: {
+                        from: emailObj.from,
+                        to: emailObj.to
+                    }
+                });
+            } catch (err) {
+                // best-effort
+            }
         }
 
-        return {
+        const response = {
             count: emails.length,
             query: searchQuery,
             intent,
             emails
         };
+
+        return response;
     }
 
     async sendEmailWorkflow(params, context = {}) {

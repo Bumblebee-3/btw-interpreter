@@ -37,6 +37,13 @@
             "poll_interval_ms":15000
         },
 
+        "browser":{
+            "enabled":true,
+            "headless":false,
+            "user_data_dir":"/home/bumblebee/.mozilla/firefox/playwright-profile",
+            "firefox_executable_path":""
+        },
+
         "weather":{
             "weather_api_key":"",
             "default_location":"mumbai"

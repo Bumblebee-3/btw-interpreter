@@ -105,7 +105,7 @@ async function plugin_answer(query,gapi,func,data,ctx) {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "groq/compound",
+                model: "llama-3.3-70b-versatile",
                 messages: [
                     { role: "user", content: prompt }
                 ]

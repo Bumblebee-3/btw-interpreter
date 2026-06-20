@@ -159,6 +159,11 @@ function extractGenericSendIntent(input) {
   const raw = String(input || "").trim();
   if (!raw) return null;
 
+  // Do not treat inbox/mail retrieval requests as send intents.
+  if (/\b(inbox|gmail|email|emails|mailbox|latest email|unread email|read email|check email)\b/i.test(raw)) {
+    return null;
+  }
+
   const normalized = raw
     .replace(/^\s*(?:hey|hi|hello)\s*,?\s*/i, "")
     .replace(/^\s*(?:can\s+you|can\s+u|could\s+you|would\s+you|will\s+you|pls|plz|please|just)\s+/i, "")
@@ -181,6 +186,9 @@ function extractGenericSendIntent(input) {
       .replace(/[.!?]+$/g, "");
     const message = String(match[2] || "").trim();
     if (!recipient || !message) continue;
+
+    // Ignore "tell me ..." and similar self-targeted asks.
+    if (/^(me|myself|us|ourselves)$/i.test(recipient)) continue;
 
     return { recipient, message };
   }
