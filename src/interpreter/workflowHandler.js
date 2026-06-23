@@ -1,3 +1,4 @@
+const R = require('./response.js');
 const { loadPlugin } = require("./pluginHandler.js");
 
 function asParamDescriptor(param) {
@@ -560,9 +561,10 @@ function handleExecutionResult(state, obj, workflowResult) {
       delete state.params[field];
     }
 
+    const msg = stringifyResult(workflowResult);
     return {
       handled: true,
-      response: stringifyResult(workflowResult)
+      response: R.ask(msg, workflowResult.options || [])
     };
   }
 

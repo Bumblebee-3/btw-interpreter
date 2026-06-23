@@ -2,11 +2,25 @@ const {checkCommands , handleCommand} = require("./commandHandler.js");
 const {resolvePluginIntent , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
 const {handleWorkflowInput} = require("./workflowHandler.js");
 const {answer} = require("./groq.js");
+const R = require("./response.js");
+
 async function handle(query,obj){
     obj.previousUserQuery = obj.lastUserQuery || "";
     obj.lastUserQuery = query;
 
     const finalize = (response) => {
+        // backwards compat: bare strings become text type
+        if (typeof response === "string") {
+            // parse out LINK:[url] that Tavily and Gmail already embed
+            const linkMatch = response.match(/LINK:\[(https?:\/\/[^\]]+)\]/);
+            if (linkMatch) {
+                const url = linkMatch[1];
+                const content = response.replace(/LINK:\[.*?\]/, "").trim();
+                response = R.rich(content, [{ label: "Open", type: "open_url", value: url }]);
+            } else {
+                response = R.text(response);
+            }
+        }
         obj.lastAssistantResponse = response;
         global.__btwLastAssistantResponse = response;
         return response;
