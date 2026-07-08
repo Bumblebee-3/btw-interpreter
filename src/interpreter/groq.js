@@ -1,4 +1,4 @@
-/* IM SO BORED WHY AM I DOING THIS */
+const MessageHistory = require("./messageHistory.js");
 
 function extractGroqContent(payload) {
     const choices = Array.isArray(payload?.choices) ? payload.choices : [];
@@ -16,30 +16,56 @@ function extractGroqContent(payload) {
     return "I could not generate a response right now. Please try again.";
 }
 
+async function callGroq(prompt, gapi) {
+    const res = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${gapi}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "llama-3.3-70b-versatile",
+                messages: [
+                    { role: "user", content: prompt }
+                ]
+            })
+        }
+    );
+
+    return await res.json();
+}
+
+async function rewriteQuery(prompt, gapi) {
+    const data = await callGroq(prompt, gapi);
+    return extractGroqContent(data);
+}
+
 
 async function answer(query,gapi,cp=false,obj) {
+    // Inject history context into the prompt if available
+    if (obj?.messageHistory) {
+        const history = obj.messageHistory.getAll();
+        if (history.length > 0) {
+            const historyContext = history.map(turn => 
+                `[Conversation history]\n` +
+                `User (${turn.timestamp}): ${turn.userQuery}\n` +
+                `Tool: ${turn.toolName || 'none'}\n` +
+                `Raw data: ${JSON.stringify(turn.rawToolData, null, 2).slice(0, 1200)}\n` +
+                `Response: ${turn.llmFormattedResult.slice(0, 400)}\n` +
+                `[End of history]\n`
+            ).join("\n");
+            
+            query = `${historyContext}\nCurrent query: ${query}`;
+        }
+    }
+
     if(!obj.db.dbPath){
         var prompt;
         if (cp == false) prompt = "You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences. Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read. Here is the query: "+query;
         else prompt = query;
-        const res = await fetch(
-            "https://api.groq.com/openai/v1/chat/completions",
-            {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${gapi}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model: "llama-3.3-70b-versatile",
-                    messages: [
-                        { role: "user", content: prompt }
-                    ]
-                })
-            }
-        );
-
-        const data = await res.json();
+        const data = await callGroq(prompt, gapi);
         return extractGroqContent(data);
     } else {
         let answer = await obj.db.searchDB(query,10,obj.table_config);
@@ -83,6 +109,23 @@ async function answer(query,gapi,cp=false,obj) {
 
 
 async function plugin_answer(query,gapi,func,data,ctx) {
+    // Inject history context into the prompt if available
+    if (ctx?.messageHistory) {
+        const history = ctx.messageHistory.getAll();
+        if (history.length > 0) {
+            const historyContext = history.map(turn => 
+                `[Conversation history]\n` +
+                `User (${turn.timestamp}): ${turn.userQuery}\n` +
+                `Tool: ${turn.toolName || 'none'}\n` +
+                `Raw data: ${JSON.stringify(turn.rawToolData, null, 2).slice(0, 1200)}\n` +
+                `Response: ${turn.llmFormattedResult.slice(0, 400)}\n` +
+                `[End of history]\n`
+            ).join("\n");
+            
+            query = `${historyContext}\nCurrent query: ${query}`;
+        }
+    }
+
     const prompt = 
         `You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences.\n`+
         `Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read.\n`+
@@ -96,25 +139,9 @@ async function plugin_answer(query,gapi,func,data,ctx) {
         `THE EMAIL MUST BE EASILY READABLE BY TTS AGENTS, SO DO NOT SEND UNNECESSARY DATA AND ANSWER WITHIN 1-2 SENTENCES. Do not send timestamps, only dates is good enough.`;
 
     //console.log(prompt);
-    const res = await fetch(
-        "https://api.groq.com/openai/v1/chat/completions",
-        {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${gapi}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "user", content: prompt }
-                ]
-            })
-        }
-    );
-    const d = await res.json();
+        const d = await callGroq(prompt, gapi);
     return extractGroqContent(d);
 }
 
 
-module.exports = {answer,plugin_answer}
+module.exports = {answer,plugin_answer,rewriteQuery}

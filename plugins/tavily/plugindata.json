@@ -18,7 +18,9 @@
                 "min_token_ratio": 0.5,
                 "keywords": [
                     "look up", "lookup", "search", "find", "online", "internet", "web", "google",
-                    "review", "reviews", "ratings", "user experiences", "news", "latest news"
+                    "review", "reviews", "ratings", "user experiences", "news", "latest news", "research", "look it up", "find out", "do the research", "search for", 
+"look into", "investigate", "check", "find more", "tell me more about",
+"dig into", "look that up", "can you find", "search that"
                 ]
             },
             "keywords": [

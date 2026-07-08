@@ -408,13 +408,19 @@ async function callPluginFunction(instance, funcd, input) {
 async function handlePlugin(plugin,func,query,gapi,ctx){
     const pluginInstance = loadPlugin(plugin, plugin.params);
     const result = await callPluginFunction(pluginInstance,func,query);
-    if (func.requires_LLM==true){
+    
+    // Store the raw result for memory tracking
+    if (func.requires_LLM === false) {
+        // For plugins that don't require LLM, we return the raw data directly 
+        // This is handled by the caller in interpreter/index.js to record it in history
+        return result;
+    } else {
+        // For plugins that do require LLM, we process with plugin_answer
         if(func.custom_prompt==true){
             return await answer(query,gapi,true,ctx);
         }
         return await plugin_answer(query,gapi,func,result,ctx);
     }
-    return result;
 }
 
 async function handlePluginFollowUp(query, obj) {
