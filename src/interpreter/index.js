@@ -18,7 +18,9 @@ async function handle(query,obj){
     const historySnapshot = obj.messageHistory ? obj.messageHistory.getAll() : [];
     let effectiveQuery = query;
 
-    if (shouldRewriteQuery(query, historySnapshot, obj.workflowState)) {
+    if (shouldRewriteQuery(query, historySnapshot, obj.workflowState, {
+        lastToolName: historySnapshot.length > 0 ? historySnapshot[historySnapshot.length - 1].toolName : ""
+    })) {
         try {
             const rewritePrompt = buildRewritePrompt(historySnapshot, query);
             const rewrittenQuery = await rewriteQuery(rewritePrompt, obj.groq_api);

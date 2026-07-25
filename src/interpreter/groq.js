@@ -75,7 +75,7 @@ async function answer(query,gapi,cp=false,obj) {
         }
         //console.log(string);
         const prompt =
-            "You are Bumblebee, a helpful voice assistant. " +
+            "You are Bumblebee, a helpful voice assistant made by Hridhuun Savant. " +
             "Answer concisely in 1-2 sentences. " +
             "Plain text only. No markdown. " +
             "Output will be used for TTS, so keep it clear and easy to read. " +
@@ -127,7 +127,7 @@ async function plugin_answer(query,gapi,func,data,ctx) {
     }
 
     const prompt = 
-        `You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences.\n`+
+        `You are a helpful voice assistant named Bumblebee made by Hridhuun Savant. Answer the user's question concisely in one or two sentences.\n`+
         `Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read.\n`+
         `Here is the query: ${query}\n`+
         `Answer using the provided data strictly. If no data exists, say that you can't find any data.\n`+

@@ -2,6 +2,12 @@ const FOLLOW_UP_PRONOUNS = /\b(it|that|this|they|them|its|those|these)\b/i;
 const FOLLOW_UP_RELATIVE = /\b(also|too|as well|instead|rather|versus|compared to)\b/i;
 const FOLLOW_UP_IMPLICIT = /\b(will it work|is it good|what about|how about|and the|what does it)\b/i;
 const META_INSTRUCTION = /\b(research|find out|look it up|look up|tell me more|dig deeper|learn more|investigate|check)\b/i;
+const BROWSER_COMMAND_START = /^(open|close|click|type|scroll|focus|go back|back|submit|inspect|navigate|visit|go to)\b/i;
+const BROWSER_TOOL_NAMES = new Set([
+    "Browser.controlBrowser",
+    "Browser.getPageElements",
+    "Browser.getBrowserStatus"
+]);
 const COMMAND_VERBS = /^(turn|lock|unlock|open|close|start|stop|enable|disable|mute|unmute|increase|decrease|play|pause|resume|launch|restart|shutdown|power off|poweroff|reboot|next|previous|skip|scroll|zoom|screenshot|take screenshot|go back|go forward)\b/i;
 const MAX_REWRITE_LENGTH = 120;
 
@@ -34,6 +40,10 @@ function isLikelyCommandQuery(query) {
     }
 
     return /^(turn|lock|unlock|open|close|start|stop|enable|disable|mute|unmute|increase|decrease|play|pause|resume|launch|restart|shutdown|reboot)\b/i.test(text);
+}
+
+function isBrowserCommandQuery(query) {
+    return BROWSER_COMMAND_START.test(normalizeInput(query));
 }
 
 function isFollowUpQuery(query) {
@@ -114,7 +124,7 @@ function buildRewritePrompt(history, query) {
     ].join("\n");
 }
 
-function shouldRewriteQuery(query, history, workflowState) {
+function shouldRewriteQuery(query, history, workflowState, context = {}) {
     if (workflowState) {
         return false;
     }
@@ -128,7 +138,16 @@ function shouldRewriteQuery(query, history, workflowState) {
         return false;
     }
 
+    const lastToolName = normalizeInput(context?.lastToolName || context?.toolName);
+    if (lastToolName && BROWSER_TOOL_NAMES.has(lastToolName)) {
+        return false;
+    }
+
     if (isLikelyCommandQuery(normalized)) {
+        return false;
+    }
+
+    if (isBrowserCommandQuery(normalized)) {
         return false;
     }
 
@@ -240,6 +259,7 @@ module.exports = {
     getRecentTurns,
     isFollowUpQuery,
     isLikelyCommandQuery,
+    isBrowserCommandQuery,
     finalizeRewrite,
     shouldRewriteQuery
 };

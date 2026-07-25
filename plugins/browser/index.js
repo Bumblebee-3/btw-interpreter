@@ -647,6 +647,22 @@ class BrowserPlugin {
 			}
 		}
 
+		if (/\b(search|searchbox|search bar|search field)\b/.test(lowered)) {
+			const searchFallbackSelectors = [
+				"input[name='search_query']",
+				"input[type='search']",
+				"[aria-label*='Search']"
+			];
+
+			for (const selector of searchFallbackSelectors) {
+				const loc = page.locator(selector).first();
+				if (await loc.count()) {
+					await loc.click();
+					return `Focused ${selector}.`;
+				}
+			}
+		}
+
 		const byLabel = page.getByLabel(targetValue, { exact: false });
 		if (await byLabel.count()) {
 			await byLabel.first().click();
