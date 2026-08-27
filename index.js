@@ -14,7 +14,7 @@ dotenv.config({
 
 var config = require((path.resolve(__dirname, "config.json")))
 
-var intr = new Interpreter({ groq_api_key:(config.groq_api_key || process.env.gapi) });
+var intr = new Interpreter({ lm_studio: config.lm_studio });
 
 config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key==""||!config.plugins.tavily.tavily_api_key)?process.env.tapi:config.plugins.tavily.tavily_api_key;
 config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key==""||!config.plugins.weather.weather_api_key)?process.env.wapi:config.plugins.weather.weather_api_key;
@@ -53,6 +53,7 @@ intr.loadDB(config.rag.location,config.rag.table_limit);
 
 async function main() {
   await intr.db.createTable("gmail_rag");
+  
   const question = process.argv.slice(2).join(" ");
   intr.email=process.env.email;
 

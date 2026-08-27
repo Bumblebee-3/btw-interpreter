@@ -1,9 +1,9 @@
 # BTW - Interpreter
-## A backend for BTW (Bumblebee Trusts Wikipedia - voice assistant for Arch Linux). Based on Groqs chat completion endpoints.
+## A backend for BTW (Bumblebee Trusts Wikipedia - voice assistant for Arch Linux). Uses a local LM Studio chat completion endpoint.
 
 ## Features
 - System commands: run system commands like setting screen brightness, locking, shutting down, setting volume, updating packages etc.
-- Plugins: supports community made plugins to give GROQ as much information as needed (from gmail/calendar/weather api/web search via tavily etc.) to answer your questions accurately.
+- Plugins: supports community made plugins to give the local model as much information as needed (from gmail/calendar/weather api/web search via tavily etc.) to answer your questions accurately.
 - Stateful plugin workflows: plugins can declare action workflows (for example send email, create event) with required/optional parameters collected across conversation turns.
 - RAG: inbuilt RAG capabilities using LanceDB and Gemini embedding models.
 
@@ -23,9 +23,14 @@ What were Lewis Hamilton's thoughts on the new 2026 regulations?
 ```javascript
 const {Interpreter} = require("./src/index.js")
 
-var interpreter = new Interpreter({ groq_api_key:"API KEY HERE" });//get one at console.groq.com
+var interpreter = new Interpreter({
+  lm_studio: {
+    baseUrl: "http://127.0.0.1:1234",
+    fallbackModel: "qwen/qwen3-4b"
+  }
+});
 ```
-### 1. Normal GROQ AI chatbot:
+### 1. Normal local AI chatbot:
 ```javascript
 console.log(await interpreter.query("What is the integral of 2x^2 ?"));
 ```
@@ -95,7 +100,7 @@ When reminder time is reached, a Zenity popup appears with actions:
 - Remind in 1 day
 - Remind in 1 week
 
-The data passed from plugins is automatically given to GROQ as a system prompt.
+The data passed from plugins is automatically given to the local model as a system prompt.
 
 Plugins can also declare actionable workflows in `plugindata.json` via a `workflows` array:
 - Workflow matching is keyword-based.

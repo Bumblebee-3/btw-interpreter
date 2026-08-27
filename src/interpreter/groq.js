@@ -1,5 +1,89 @@
 const MessageHistory = require("./messageHistory.js");
 
+const DEFAULT_CONFIG = {
+    baseUrl: "http://127.0.0.1:1234",
+    fallbackModel: "qwen/qwen3-4b",
+    contextLength: 12817,
+    evaluationBatchSize: 1048576,
+    reasoning: "off"
+};
+
+let localConfig = {...DEFAULT_CONFIG};
+let activeModel = null;
+let modelReady = null;
+
+function configureLocalInference(config = {}) {
+    localConfig = {
+        ...DEFAULT_CONFIG,
+        ...config,
+        baseUrl: String(config.baseUrl || DEFAULT_CONFIG.baseUrl).replace(/\/$/, "")
+    };
+    activeModel = null;
+    modelReady = null;
+}
+
+function modelKey(model, instance) {
+    if (typeof instance === "string" && instance.trim()) return instance;
+    if (instance && typeof instance === "object") {
+        for (const key of ["id", "model", "key"]) {
+            if (typeof instance[key] === "string" && instance[key].trim()) return instance[key];
+        }
+    }
+    return model?.key || model?.id || null;
+}
+
+async function ensureLocalModel() {
+    if (activeModel) return activeModel;
+    if (modelReady) return modelReady;
+
+    modelReady = (async () => {
+        const modelsResponse = await fetch(`${localConfig.baseUrl}/api/v1/models`);
+        if (!modelsResponse.ok) {
+            throw new Error(`LM Studio model list failed (${modelsResponse.status})`);
+        }
+        const payload = await modelsResponse.json();
+        const models = Array.isArray(payload.models) ? payload.models : [];
+        const loaded = models.find(model =>
+            model?.type === "llm" && Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0
+        );
+
+        if (loaded) {
+            activeModel = loaded.key || loaded.id || modelKey(loaded, loaded.loaded_instances[0]);
+            if (activeModel) return activeModel;
+        }
+
+        const fallback = models.find(model => model?.type === "llm" && modelKey(model) === localConfig.fallbackModel);
+        if (!fallback) {
+            throw new Error(`Fallback model is not available in LM Studio: ${localConfig.fallbackModel}`);
+        }
+
+        const loadResponse = await fetch(`${localConfig.baseUrl}/api/v1/models/load`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                model: localConfig.fallbackModel,
+                context_length: localConfig.contextLength,
+                eval_batch_size: localConfig.evaluationBatchSize,
+                offload_kv_cache_to_gpu: true
+            })
+        });
+        if (!loadResponse.ok) {
+            const errorText = await loadResponse.text();
+            throw new Error(`LM Studio model load failed (${loadResponse.status}): ${errorText}`);
+        }
+
+        activeModel = localConfig.fallbackModel;
+        return activeModel;
+    })();
+
+    try {
+        return await modelReady;
+    } catch (error) {
+        modelReady = null;
+        throw error;
+    }
+}
+
 function extractGroqContent(payload) {
     const choices = Array.isArray(payload?.choices) ? payload.choices : [];
     const first = choices[0];
@@ -17,24 +101,21 @@ function extractGroqContent(payload) {
 }
 
 async function callGroq(prompt, gapi) {
-    const res = await fetch(
-        "https://api.groq.com/openai/v1/chat/completions",
-        {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${gapi}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: "openai/gpt-oss-120b",
-                messages: [
-                    { role: "user", content: prompt }
-                ]
-            })
-        }
-    );
+    const res = await fetch(`${localConfig.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            model: await ensureLocalModel(),
+            reasoning_effort: localConfig.reasoning,
+            messages: [{role: "user", content: prompt}]
+        })
+    });
 
-    return await res.json();
+    const data = await res.json();
+    if (!res.ok) {
+        throw new Error(data?.error?.message || `LM Studio inference failed (${res.status})`);
+    }
+    return data;
 }
 
 async function rewriteQuery(prompt, gapi) {
@@ -85,24 +166,7 @@ async function answer(query,gapi,cp=false,obj) {
             string + "\n" +
             "Query: " + query;
 
-        const res = await fetch(
-            "https://api.groq.com/openai/v1/chat/completions",
-            {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${gapi}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model: "openai/gpt-oss-120b",
-                    messages: [
-                        { role: "user", content: prompt }
-                    ]
-                })
-            }
-        );
-
-        const data = await res.json();
+        const data = await callGroq(prompt, gapi);
         return extractGroqContent(data);
     }
 }
@@ -144,4 +208,4 @@ async function plugin_answer(query,gapi,func,data,ctx) {
 }
 
 
-module.exports = {answer,plugin_answer,rewriteQuery}
+module.exports = {answer,plugin_answer,rewriteQuery,configureLocalInference}

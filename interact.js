@@ -6,19 +6,7 @@ const path = require("path");
 const { Interpreter } = require("./src/index.js");
 const config = require("./config.json");
 
-const resolvedGroqKey =
-  config.groq_api_key ||
-  process.env.gapi ||
-  process.env.GAPI ||
-  process.env.groq_api_key ||
-  process.env.GROQ_API_KEY;
-
-if (!resolvedGroqKey) {
-  console.error("Missing GROQ API key. Set one of: config.groq_api_key, gapi, GAPI, groq_api_key, GROQ_API_KEY");
-  process.exit(1);
-}
-
-const intr = new Interpreter({ groq_api_key: resolvedGroqKey });
+const intr = new Interpreter({ lm_studio: config.lm_studio });
 
 // attach interpreter to plugin params so plugins can call back to LLM
 config.plugins.gmail.obj = intr;
@@ -52,6 +40,11 @@ intr.loadDB(config.rag.location, config.rag.table_limit);
 if (config.plugins.browser && config.plugins.browser.enabled === true) {
   intr.loadPlugins("browser",config.plugins.browser);
 }
+async function a(){
+await intr.db.addToTable("memory", "User likes Arch Linux.");
+await intr.db.addToTable("memory", "User's system specifications are:Dell Inspiron 15 3567 which has cpu: core i3 6006u,gpu: Intel hd 520 graphics and ram: 16 gb ddr4.");
+}
+//a();
 const readline = require("readline").createInterface({ input: process.stdin, output: process.stdout });
 let isClosed = false;
 

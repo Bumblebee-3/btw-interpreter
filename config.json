@@ -1,5 +1,12 @@
 {
-    "groq_api_key":"",
+    "lm_studio":{
+        "baseUrl":"http://127.0.0.1:1234",
+        "fallbackModel":"qwen/qwen3-4b",
+        "contextLength":12817,
+        "evaluationBatchSize":1048576,
+        "offloadKvCacheToGpu":true,
+        "reasoning":"none"
+    },
     "rag":{
         "location":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/lancedb/",
         "table_limit":{

@@ -2,7 +2,7 @@ let fs = require("fs");
 let path = require("path");
 const queryHandler = require("./interpreter/index.js");
 
-const {answer} = require("./interpreter/groq.js");
+const {answer, configureLocalInference} = require("./interpreter/groq.js");
 
 class Interpreter {
     constructor(args){
@@ -10,8 +10,8 @@ class Interpreter {
         this.plugins = [];
         this.workflowState = null;
         this.reminderManager = null;
-        if(!args.groq_api_key) throw new Error("Please provide groq api key!");
-        this.groq_api = args.groq_api_key;
+        configureLocalInference(args.lm_studio);
+        this.groq_api = null;
         this.db = {};
         this.table_config = {};
     }
