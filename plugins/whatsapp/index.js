@@ -69,10 +69,18 @@ let singleton = {
 };
 
 function getBrowserIdentity() {
-  if (Browsers && typeof Browsers.macOS === "function") {
-    return Browsers.macOS("Desktop");
+  if (Browsers && typeof Browsers.Ubuntu === "function") {
+    return Browsers.Ubuntu("Desktop");
   }
   return ["BTW Interpreter", "Chrome", "1.0.0"];
+}
+
+function shouldDisplayQrUpdate(qr, connection, connectionState, previousQr) {
+  if (!qr) return false;
+  if (connection === "open" || connection === "close") return false;
+  if (connectionState === "open" || connectionState === "close") return false;
+  if (!previousQr) return true;
+  return qr !== previousQr;
 }
 
 function mapDisconnectError(statusCode, rawMessage) {
@@ -522,27 +530,29 @@ function mergeLinkSources(primary = [], fallback = [], limit = 24) {
   return merged.slice(-Math.max(1, Number(limit) || 24));
 }
 
-function getLinkSourcesNearTimestamp(jid, pivotTs, windowSec = 3 * 60 * 60, limit = 6) {
-  const bucket = singleton.linkSummaries.get(jid) || [];
+function selectRelevantLinkSources(bucket = [], pivotTs, windowSec = 3 * 60 * 60, limit = 6) {
   const pivot = Number(pivotTs || 0);
-  if (pivot <= 0) return getRecentLinkSources(jid, limit);
+  if (!Array.isArray(bucket) || bucket.length === 0) return [];
+  if (pivot <= 0) return [];
 
   const near = bucket
-    .filter(item => Math.abs(Number(item.timestamp || 0) - pivot) <= windowSec)
+    .filter(item => Number(item?.timestamp || 0) > 0 && Math.abs(Number(item.timestamp || 0) - pivot) <= windowSec)
     .slice(-Math.max(1, Number(limit) || 6));
 
-  if (near.length > 0) {
-    return near.map(item => ({
-      url: item.url,
-      platform: item.platform || "generic",
-      title: item.title || "",
-      summary: String(item.summary || "").slice(0, 800),
-      sender: item.sender || "unknown",
-      timestamp: Number(item.timestamp || 0)
-    }));
-  }
+  return near.map(item => ({
+    url: item.url,
+    platform: item.platform || "generic",
+    title: item.title || "",
+    summary: String(item.summary || "").slice(0, 800),
+    sender: item.sender || "unknown",
+    timestamp: Number(item.timestamp || 0)
+  }));
+}
 
-  return getRecentLinkSources(jid, limit);
+function getLinkSourcesNearTimestamp(jid, pivotTs, windowSec = 3 * 60 * 60, limit = 6) {
+  const bucket = singleton.linkSummaries.get(jid) || [];
+  const selected = selectRelevantLinkSources(bucket, pivotTs, windowSec, limit);
+  return selected.length > 0 ? selected : [];
 }
 
 function formatSourcesAppendix(sources = []) {
@@ -1610,8 +1620,9 @@ async function ensureSocket(authPath) {
 
       socket.ev.on("connection.update", update => {
         const { connection, lastDisconnect, qr } = update;
+        const previousConnectionState = singleton.connectionState;
 
-        if (qr && qr !== singleton.lastQr) {
+        if (qr && shouldDisplayQrUpdate(qr, connection, previousConnectionState, singleton.lastQr)) {
           singleton.lastQr = qr;
           console.log("\n[WhatsApp] Scan this QR code with WhatsApp Linked Devices:\n");
           qrcode.generate(qr, { small: true });
@@ -1621,6 +1632,7 @@ async function ensureSocket(authPath) {
         if (connection) {
           singleton.connectionState = connection;
           if (connection === "open") {
+            singleton.lastQr = "";
             console.log("[WhatsApp] Connected.");
             singleton.reconnectAttempts = 0;
             clearReconnectTimer();
@@ -1628,6 +1640,8 @@ async function ensureSocket(authPath) {
             if (merged > 0) {
               console.log(`[WhatsApp] Hydrated ${merged} messages from socket store.`);
             }
+          } else if (connection === "close") {
+            singleton.lastQr = "";
           }
         }
 
@@ -2596,5 +2610,8 @@ WhatsAppPlugin.clearAuthAndRelink = async function(authPath) {
     return { ok: false, error: String(err?.message || err) };
   }
 };
+
+WhatsAppPlugin.shouldDisplayQrUpdate = shouldDisplayQrUpdate;
+WhatsAppPlugin.selectRelevantLinkSources = selectRelevantLinkSources;
 
 module.exports = WhatsAppPlugin;

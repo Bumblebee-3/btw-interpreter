@@ -26,7 +26,7 @@ async function callGroq(prompt, gapi) {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
+                model: "openai/gpt-oss-120b",
                 messages: [
                     { role: "user", content: prompt }
                 ]
@@ -94,7 +94,7 @@ async function answer(query,gapi,cp=false,obj) {
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                    model: "llama-3.3-70b-versatile",
+                    model: "openai/gpt-oss-120b",
                     messages: [
                         { role: "user", content: prompt }
                     ]
@@ -135,8 +135,8 @@ async function plugin_answer(query,gapi,func,data,ctx) {
         `${JSON.stringify(func, null, 2)}\n` +
         `Here is the data:\n` +
         `${JSON.stringify(data, null, 2)}\n\n`+
-        `Please note: [IMPORTANT] If the user is asking for information about an email, provide the link to that email EXPlICITLY IN THE FORMAT(square brackets must engulf the link) "LINK:[https://mail.google.com/mail/u/0/?authuser=${(!ctx.email )?"0":ctx.email}#all/<THREAD_ID>]" at the end of the answer, where <THREAD_ID> is the threadId of the email. This is the only way to access the email, so if the user is asking about an email, you MUST provide this link.\n`+
-        `THE EMAIL MUST BE EASILY READABLE BY TTS AGENTS, SO DO NOT SEND UNNECESSARY DATA AND ANSWER WITHIN 1-2 SENTENCES. Do not send timestamps, only dates is good enough.`;
+        `Please note: [IMPORTANT] If the user is asking for information about an email, provide the link to that email EXPlICITLY IN THE FORMAT(square brackets must engulf the link) "LINK:[https://mail.google.com/mail/u/1/?authuser=1#all/<THREAD_ID>]" at the end of the answer, where <THREAD_ID> is the threadId of the email. This is the only way to access the email, so if the user is asking about an email, you MUST provide this link.\n`+
+        `THE EMAIL MUST BE EASILY READABLE BY TTS AGENTS, SO DO NOT SEND UNNECESSARY DATA AND ANSWER WITHIN 1-2 SENTENCES. Do not send timestamps, only dates is good enough.`;//${(!ctx.email )?"1":ctx.email}
 
     //console.log(prompt);
         const d = await callGroq(prompt, gapi);

@@ -46,9 +46,24 @@ function isBrowserCommandQuery(query) {
     return BROWSER_COMMAND_START.test(normalizeInput(query));
 }
 
+function isSelectionReply(query) {
+    const text = normalizeInput(query);
+    if (!text) return false;
+
+    const simpleSelection = /^(?:option\s*)?\d{1,2}$/i.test(text);
+    if (simpleSelection) return true;
+
+    const ordinalSelection = /^(?:one|two|three|four|five|six|seven|eight|nine|ten|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)$/i.test(text);
+    return ordinalSelection;
+}
+
 function isFollowUpQuery(query) {
     const text = normalizeInput(query);
     if (!text) {
+        return false;
+    }
+
+    if (isSelectionReply(text)) {
         return false;
     }
 
@@ -148,6 +163,10 @@ function shouldRewriteQuery(query, history, workflowState, context = {}) {
     }
 
     if (isBrowserCommandQuery(normalized)) {
+        return false;
+    }
+
+    if (isSelectionReply(normalized)) {
         return false;
     }
 

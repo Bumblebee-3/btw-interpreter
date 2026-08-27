@@ -170,14 +170,16 @@ function extractGenericSendIntent(input) {
     .replace(/^\s*(?:can\s+you|can\s+u|could\s+you|would\s+you|will\s+you|pls|plz|please|just)\s+/i, "")
     .trim();
 
-  const patterns = [
+  const directPatterns = [
+    /^(?:send|write|compose|draft|text|dm)\s+(?:a\s+)?(?:message|msg)\s+(?:to|for|in|on)\s+(.+?)\s+(?:saying|telling|tell|say|with)\s+([\s\S]+)$/i,
+    /^(?:send|write|compose|draft|text|dm)\s+(?:a\s+)?(?:message|msg)\s+(?:to|for|in|on)\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
     /^(?:please\s+|just\s+)?tell\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
     /^(?:please\s+|just\s+)?inform\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
     /^(?:please\s+|just\s+)?notify\s+(.+?)\s+(?:that\s+)?([\s\S]+)$/i,
     /^(?:please\s+|just\s+)?let\s+(.+?)\s+know\s+(?:that\s+)?([\s\S]+)$/i
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of directPatterns) {
     const match = normalized.match(pattern);
     if (!match) continue;
 
@@ -185,8 +187,14 @@ function extractGenericSendIntent(input) {
       .trim()
       .replace(/^(?:to\s+)/i, "")
       .replace(/[.!?]+$/g, "");
-    const message = String(match[2] || "").trim();
+    let message = String(match[2] || "").trim();
     if (!recipient || !message) continue;
+
+    message = message
+      .replace(/^(?:him|her|them|someone)\s+/i, "")
+      .replace(/^that\s+/i, "")
+      .trim();
+    if (!message) continue;
 
     // Ignore "tell me ..." and similar self-targeted asks.
     if (/^(me|myself|us|ourselves)$/i.test(recipient)) continue;
@@ -777,5 +785,6 @@ async function handleWorkflowInput(input, obj) {
 }
 
 module.exports = {
-  handleWorkflowInput
+  handleWorkflowInput,
+  extractGenericSendIntent
 };
