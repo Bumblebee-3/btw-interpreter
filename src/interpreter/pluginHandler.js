@@ -1,5 +1,7 @@
+//REQUIRES AI LAYER
+
 const path = require("path");
-const {answer,plugin_answer} = require("./groq.js");
+const {answer,plugin_answer, callGroqSMALL} = require("./groq.js");
 
 function normalizeText(text) {
     return String(text || "")

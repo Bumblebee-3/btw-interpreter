@@ -77,9 +77,10 @@ async function handle(query,obj){
         ? pluginFollowUp.rewrittenQuery.trim()
         : effectiveQuery;
 
-    let c = checkCommands(routingQuery,obj);
+    let c = await checkCommands(routingQuery,obj);
+    //console.log(c);
     if(c.isCommand==true){
-        const commandResult = await handleCommand(c.cmd);
+        const commandResult = await handleCommand(c.cmd,c.params);
         return finalize(commandResult, `command:${c.cmd.id}`, commandResult, "text");
     } else {
         let p= await resolvePluginIntent(routingQuery,obj);

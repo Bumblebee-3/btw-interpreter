@@ -37,6 +37,27 @@ async function callGroq(prompt, gapi) {
     return await res.json();
 }
 
+async function callGroqSMALL(prompt, gapi) {
+    const res = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${gapi}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "openai/gpt-oss-20b",
+                messages: [
+                    { role: "user", content: prompt }
+                ]
+            })
+        }
+    );
+
+    return await res.json();
+}
+
 async function rewriteQuery(prompt, gapi) {
     const data = await callGroq(prompt, gapi);
     return extractGroqContent(data);
@@ -144,4 +165,4 @@ async function plugin_answer(query,gapi,func,data,ctx) {
 }
 
 
-module.exports = {answer,plugin_answer,rewriteQuery}
+module.exports = {answer,plugin_answer,rewriteQuery,callGroq,extractGroqContent,callGroqSMALL};

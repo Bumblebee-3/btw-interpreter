@@ -1,3 +1,5 @@
+//REQUIRES AI LAYER!
+const { callGroqSMALL } = require("./groq.js");
 //need to find a better way to do ts 
 
 const { execFile } = require("node:child_process");
@@ -6,14 +8,6 @@ const { spawn } = require("node:child_process");
 const execFileAsync = promisify(execFile);
 
 
-function toRegex(inp) {
-  let pattern = inp.toLowerCase();
-  pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  pattern = pattern
-    .replace(/\\\{value\\\}/g, "(\\d+)")
-    .replace(/\\\{delta\\\}/g, "(\\d+)");
-  return new RegExp(pattern, "i");
-}
 
 function tokenScore(example, input) {
   const ext = example.toLowerCase().replace(/\{.*?\}/g, "").split(/\s+/).filter(Boolean);
@@ -23,15 +17,9 @@ function tokenScore(example, input) {
   return hits / ext.length;
 }
 
-function intentScore(example, match, text) {
-  let score = 0;
-  score += match[0].length / text.length;
-  score += tokenScore(example, text);
-  if (example.includes("{value}") || example.includes("{delta}")) score += 0.2;
-  return Math.min(score, 1);
-}
+
 /*Dont question this logic lmao*/
-function checkCommands(input, obj) {
+async function checkCommands(input, obj) {
   if(!obj.command.location ){
     return {
       isCommand: false,
@@ -39,44 +27,31 @@ function checkCommands(input, obj) {
     };
   }
   const commands = require(obj.command.location);
-  const text = input.toLowerCase().replace(/[%]/g, " percent").replace(/\s+/g, " ").trim();
 
-  let bestMatch = null;
-  let bestScore = 0;
-
+  var prompt = "You are a helpful voice assistant named Bumblebee. You are given a list of commands with their details and examples. Your task is to identify if the user's input matches any of the commands based on the examples provided. If a match is found, return the command ID and any parameters extracted from the input. If no match is found, return null.\n\nCommands:\n";
   for (const cmd of commands) {
+    prompt += `Command ID: ${cmd.id}\nDescription: ${cmd.description}\nExamples:\n`;
     for (const example of cmd.examples) {
-      const regex = toRegex(example);
-      const match = text.match(regex);
-      if (!match) continue;
-
-      const score = intentScore(example, match, text);
-      if (score > bestScore) {
-        bestScore = score;
-        const params = {};
-        if (example.includes("{value}")) params.value = Number(match[1]);
-        if (example.includes("{delta}")) params.delta = Number(match[1]);
-
-        bestMatch = {
-          id: cmd.id,
-          command: cmd,
-          parameters: params,
-          confidence: score
-        };
-      }
+      prompt += `- ${example}\n`;
     }
+    prompt += "\n";
   }
-
-  if (!bestMatch || bestScore < 0.6) {
+  prompt += `User Input: "${input}"\n\nIdentify the best matching command and extract parameters if applicable. If no match is found, return null.if match is found output must be json of the format: {"command_id": "matched_command_id", "value": "extracted_value"} or if no match is found output must be "null". PLEASE NOTE: You have to contexxt aware, only if the user intends to execute an action only then must you return that command. If the user is asking for information or help, you must return "null".`;
+  var ans = await callGroqSMALL(prompt, obj.groq_api);
+  //console.log(ans.choices[0].message.content);
+  if (ans.choices[0].message.content === "null") {
     return {
       isCommand: false,
       cmd: null
     };
   }
-
+  let parsed=JSON.parse(ans.choices[0].message.content);
+  let matched = commands.find(c => c.id === parsed.command_id);
+  //console.log(matched)
   return {
     isCommand: true,
-    cmd: bestMatch
+    cmd: matched,
+    params: parsed.value
   };
 }
 
@@ -136,7 +111,9 @@ function resolveCommand(template, parameters) {
   return cmd;
 }
 
-async function handleCommand(cmd) {
+async function handleCommand(cmd,params) {
+  cmd.command = cmd;
+  console.log(cmd,params);
   if (cmd.command.dangerous === true) {
     const approved = await confirm(cmd.command.details.title,cmd.command.details.description);
     if (!approved) {
@@ -145,7 +122,8 @@ async function handleCommand(cmd) {
   }
 
   try {
-    let command = resolveCommand(cmd.command.shell_command_template , cmd.parameters);
+    let command = resolveCommand(cmd.command.shell_command_template , {value:params});
+    //console.log(params);
     await runShellCommand(command);
     return ("Command executed successfully.");
   } catch (err) {
