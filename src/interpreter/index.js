@@ -1,7 +1,7 @@
 const {checkCommands , handleCommand} = require("./commandHandler.js");
 const {resolvePluginIntent , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
 const {handleWorkflowInput} = require("./workflowHandler.js");
-const {answer, plugin_answer, rewriteQuery} = require("./groq.js");
+const {answer, rewriteQuery} = require("./groq.js");
 const R = require("./response.js");
 const MessageHistory = require("./messageHistory.js");
 const {buildRewritePrompt, finalizeRewrite, shouldRewriteQuery} = require("./queryRewrite.js");
@@ -37,10 +37,12 @@ async function handle(query,obj){
             if (linkMatch) {
                 const url = linkMatch[1];
                 const content = response.replace(/LINK:\[.*?\]/, "").trim();
-                response = R.rich(content, [{ label: "Open", type: "open_url", value: url }]);
+                response = R.rich(content, [{ label: "Open", type: "open_url", value: url }], [toolName,rawToolData]);
             } else {
-                response = R.text(response);
+                response = R.text(response,[toolName,rawToolData]);
             }
+        } else if (!response || typeof response !== "object" || !response.type) {
+            response = R.text(JSON.stringify(response ?? null),[toolName,rawToolData]);
         }
         
         // Record the turn in memory
@@ -85,16 +87,8 @@ async function handle(query,obj){
     } else {
         let p= await resolvePluginIntent(routingQuery,obj);
         if(p.isPlugin==true){
-            // For plugins that don't require LLM - we need to capture the raw plugin result
-            if (p.function && p.function.requires_LLM === false) {
-                const pluginResult = await handlePlugin(p.plugin, p.function, routingQuery, obj.groq_api, obj);
-                return finalize(pluginResult, `${p.plugin.data.name}.${p.function.name}`, pluginResult, "text");
-            } else {
-                // For plugins that require LLM - we need to capture the raw plugin result before LLM processing
-                const pluginResult = await handlePlugin(p.plugin, p.function, routingQuery, obj.groq_api, obj);
-                const llmResponse = await plugin_answer(routingQuery, obj.groq_api, p.function, pluginResult, obj);
-                return finalize(llmResponse, `${p.plugin.data.name}.${p.function.name}`, pluginResult, "text");
-            }
+            const pluginResult = await handlePlugin(p.plugin, p.function, routingQuery, obj.groq_api, obj);
+            return finalize(pluginResult, `${p.plugin.data.name}.${p.function.name}`, pluginResult, "text");
         } else {
             // Plain LLM fallback
             const llmResponse = await answer(routingQuery, obj.groq_api, false, obj);

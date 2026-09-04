@@ -1,13 +1,13 @@
 {
     "name":"Tavily",
-    "description":"Web Queries functionality to AI",
+    "description":"Search the public web for current information, news, reviews, and factual answers",
     "entrypoint":"index.js",
     "plugin_params":["search_depth","country","tavily_api_key"],
     
     "functions":[
         {
             "name":"searchOnline",
-            "description":"Searches online for given input and answer the question.",
+            "description":"Search the public web for current information, news, reviews, and factual answers about the user's query.",
             "async":true,
             "requires_LLM":false,
             "intent_guard": {

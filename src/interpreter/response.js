@@ -1,9 +1,9 @@
-function text(content) {
-  return { type: "text", content };
+function text(content,plugins=[]) {
+  return { type: "text", content,plugins };
 }
 
-function rich(content, actions = []) {
-  return { type: "rich", content, actions };
+function rich(content, actions = [],plugins=[]) {
+  return { type: "rich", content, actions,plugins };
 }
 
 function ask(question, options = []) {

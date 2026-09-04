@@ -1,152 +1,7 @@
 //REQUIRES AI LAYER
 
 const path = require("path");
-const {answer,plugin_answer, callGroqSMALL} = require("./groq.js");
-
-function normalizeText(text) {
-    return String(text || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9@._-\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
-function toTokenSet(text) {
-    return new Set(normalizeText(text).split(/[^a-z0-9@._-]+/i).filter(Boolean));
-}
-
-function scoreKeywordList(query, keywords, minRatio = 0.66) {
-    const qNorm = normalizeText(query);
-    if (!qNorm) return { score: 0, confidence: 0 };
-
-    const qTokens = toTokenSet(qNorm);
-    let score = 0;
-
-    for (const keyword of keywords || []) {
-        const keyNorm = normalizeText(keyword);
-        if (!keyNorm) continue;
-
-        if (qNorm.includes(keyNorm)) {
-            const tokenCount = keyNorm.split(/\s+/).filter(Boolean).length;
-            score += Math.max(1, tokenCount) * 3;
-            continue;
-        }
-
-        const keyTokens = keyNorm.split(/[^a-z0-9@._-]+/i).filter(Boolean);
-        if (!keyTokens.length) continue;
-
-        let hits = 0;
-        for (const token of keyTokens) {
-            if (qTokens.has(token)) hits++;
-        }
-
-        const ratio = hits / keyTokens.length;
-        if (ratio >= minRatio) {
-            score += Math.max(1, keyTokens.length) * ratio * 2;
-        }
-    }
-
-    const maxScore = Math.max(1, (keywords || []).length * 3);
-    return {
-        score,
-        confidence: Math.max(0, Math.min(1, score / maxScore))
-    };
-}
-
-function checkPlugins(query, obj) {
-    const inp = normalizeText(query);
-    const inpTokens = new Set(inp.split(/[^a-z0-9@._-]+/i).filter(Boolean));
-    const plugins = obj.plugins;
-    const ranked = [];
-    let best = {
-        score: 0,
-        specificity: 0,
-        confidence: 0,
-        plugin: null,
-        function: null,
-        isPlugin:false
-    };
-    for (const plugin of plugins) {
-        for (const func of plugin.data.functions) {
-            let score = 0;
-            let specificity = 0;
-            for (const keyword of func.keywords) {
-                const normalizedKeyword = String(keyword || "").toLowerCase().trim();
-                if (!normalizedKeyword) continue;
-
-                if (inp.includes(normalizedKeyword)) {
-                    const tokenCount = normalizedKeyword.split(/\s+/).filter(Boolean).length;
-                    score += Math.max(1, tokenCount) * 3;
-                    specificity += normalizedKeyword.length;
-                    continue;
-                }
-
-                const keyTokens = normalizedKeyword.split(/[^a-z0-9@._-]+/i).filter(Boolean);
-                if (keyTokens.length === 0) continue;
-
-                let hits = 0;
-                for (const token of keyTokens) {
-                    if (inpTokens.has(token)) hits++;
-                }
-
-                const ratio = hits / keyTokens.length;
-                if (ratio >= 0.66) {
-                    score += Math.max(1, keyTokens.length) * ratio * 2;
-                    specificity += normalizedKeyword.length * ratio;
-                }
-            }
-
-            if (score > 0) {
-                ranked.push({
-                    score,
-                    specificity,
-                    plugin,
-                    function: func
-                });
-            }
-
-            if (score > best.score || (score === best.score && specificity > best.specificity)) {
-                best.score = score;
-                best.specificity = specificity;
-                best.plugin = plugin;
-                best.function = func;
-                best.isPlugin = true;
-            }
-        }
-    }
-
-    ranked.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return b.specificity - a.specificity;
-    });
-
-    const confidence = Math.max(0, Math.min(1, best.score / 12));
-    const second = ranked[1] || null;
-    const ambiguity = second
-        ? Math.max(0, Math.min(1, (best.score - second.score) / Math.max(1, best.score)))
-        : 1;
-
-    if (best.score === 0) {
-        return {
-            isPlugin:false,
-            confidence: 0,
-            ambiguity: 0,
-            ranked: []
-        };
-    }
-
-    best.confidence = confidence;
-    best.ambiguity = ambiguity;
-    best.ranked = ranked.slice(0, 5);
-    return best;
-}
-
-function shouldUseLLMClassifier(heuristicResult) {
-    if (!heuristicResult || !heuristicResult.isPlugin) return true;
-    if (heuristicResult.confidence < 0.72) return true;
-    if (heuristicResult.ambiguity < 0.2) return true;
-    return false;
-}
+const {answer,plugin_answer, callGroqSMALL, extractGroqContent} = require("./groq.js");
 
 function buildFunctionCatalog(plugins) {
     const catalog = [];
@@ -156,6 +11,7 @@ function buildFunctionCatalog(plugins) {
             catalog.push({
                 pluginName,
                 functionName: String(func?.name || "").trim(),
+                pluginDescription: String(plugin?.data?.description || ""),
                 description: String(func?.description || ""),
                 keywords: Array.isArray(func?.keywords) ? func.keywords.slice(0, 20) : []
             });
@@ -165,13 +21,13 @@ function buildFunctionCatalog(plugins) {
 }
 
 function findPluginFunction(plugins, pluginName, functionName) {
-    const pName = normalizeText(pluginName);
-    const fName = normalizeText(functionName);
+    const pName = String(pluginName || "").trim().toLowerCase();
+    const fName = String(functionName || "").trim().toLowerCase();
 
     for (const plugin of plugins || []) {
-        if (normalizeText(plugin?.data?.name) !== pName) continue;
+        if (String(plugin?.data?.name || "").trim().toLowerCase() !== pName) continue;
         for (const func of plugin?.data?.functions || []) {
-            if (normalizeText(func?.name) === fName) {
+            if (String(func?.name || "").trim().toLowerCase() === fName) {
                 return { plugin, function: func };
             }
         }
@@ -179,166 +35,51 @@ function findPluginFunction(plugins, pluginName, functionName) {
     return null;
 }
 
-function resolveBrowserDirectIntent(query, plugins) {
-    const text = normalizeText(query);
-    if (!text) return null;
-
-    const actionLike = /\b(open|go to|visit|navigate|click|press|tap|type|enter|fill|submit|close|exit|quit|scroll|focus|select|choose)\b/i.test(text);
-    const pageInspectLike = /\b(show links|list links|show buttons|list buttons|show inputs|inspect page|page elements|browser status|current page|current url)\b/i.test(text);
-    const hasUrl = /https?:\/\//i.test(String(query || ""));
-
-    if (!actionLike && !pageInspectLike && !hasUrl) {
-        return null;
-    }
-
-    const browserPlugin = (plugins || []).find(p => normalizeText(p?.data?.name) === "browser");
-    if (!browserPlugin) return null;
-
-    const fnName = pageInspectLike ? "getPageElements" : "controlBrowser";
-    const func = (browserPlugin?.data?.functions || []).find(f => normalizeText(f?.name) === normalizeText(fnName));
-    if (!func) return null;
-
-    return {
-        isPlugin: true,
-        plugin: browserPlugin,
-        function: func,
-        confidence: 0.99,
-        via: "browser_direct"
-    };
-}
-
-function resolveEmailDirectIntent(query, plugins) {
-    const text = normalizeText(query);
-    if (!text) return null;
-
-    const hasInboxOrMail = /\b(inbox|gmail|email|emails|mail|mails|mailbox)\b/i.test(text);
-    const hasEmailAsk = /\b(latest|recent|new|unread|from|subject|check|read|show|what)\b/i.test(text);
-    if (!hasInboxOrMail || !hasEmailAsk) {
-        return null;
-    }
-
-    const gmailPlugin = (plugins || []).find(p => normalizeText(p?.data?.name) === "gmail");
-    if (!gmailPlugin) return null;
-
-    const func = (gmailPlugin?.data?.functions || []).find(f => normalizeText(f?.name) === "getemails");
-    if (!func) return null;
-
-    return {
-        isPlugin: true,
-        plugin: gmailPlugin,
-        function: func,
-        confidence: 0.99,
-        via: "email_direct"
-    };
-}
-
-function resolveGuardedIntent(query, plugins) {
-    let best = null;
-
-    for (const plugin of plugins || []) {
-        for (const func of plugin?.data?.functions || []) {
-            const guard = func?.intent_guard;
-            if (!guard || guard.enabled === false) continue;
-
-            const keywords = Array.isArray(guard.keywords) ? guard.keywords : [];
-            if (!keywords.length) continue;
-
-            const minRatio = Number.isFinite(Number(guard.min_token_ratio))
-                ? Number(guard.min_token_ratio)
-                : 0.66;
-            const minScore = Number.isFinite(Number(guard.min_score))
-                ? Number(guard.min_score)
-                : 3;
-            const minConfidence = Number.isFinite(Number(guard.min_confidence))
-                ? Number(guard.min_confidence)
-                : 0.35;
-            const priority = Number.isFinite(Number(guard.priority))
-                ? Number(guard.priority)
-                : 0;
-
-            const scored = scoreKeywordList(query, keywords, minRatio);
-            if (scored.score < minScore || scored.confidence < minConfidence) continue;
-
-            const candidate = {
-                plugin,
-                function: func,
-                score: scored.score,
-                confidence: scored.confidence,
-                priority
-            };
-
-            if (!best) {
-                best = candidate;
-                continue;
-            }
-
-            if (candidate.priority > best.priority) {
-                best = candidate;
-                continue;
-            }
-
-            if (candidate.priority === best.priority && candidate.score > best.score) {
-                best = candidate;
-            }
-        }
-    }
-
-    if (!best) return null;
-    return {
-        isPlugin: true,
-        plugin: best.plugin,
-        function: best.function,
-        confidence: best.confidence,
-        via: "metadata_guard"
-    };
-}
-
-async function classifyPluginIntentWithLLM(query, obj, heuristicResult) {
-    if (!obj || typeof obj.customQuery !== "function") return null;
-
-    const catalog = buildFunctionCatalog(obj.plugins);
-    if (!catalog.length) return null;
-
-    const heuristicHints = (heuristicResult?.ranked || [])
-        .slice(0, 3)
-        .map(item => ({
-            plugin: item.plugin?.data?.name,
-            function: item.function?.name,
-            score: item.score
-        }));
-
-    const prompt =
-`Classify the user query to one plugin function.
-Return JSON only with schema:
+function buildRoutingPrompt(query, catalog) {
+    return `You are a router for a voice assistant. Given a user query, decide if it maps to a specific plugin function.
+Return ONLY valid JSON matching this schema exactly:
 {
-  "route": "plugin|none",
-  "plugin": "exact plugin name or empty",
-  "function": "exact function name or empty",
-  "confidence": number,
-  "reason": "short"
+  "route": "plugin" | "none",
+  "plugin": "exact plugin name or empty string",
+  "function": "exact function name or empty string",
+  "confidence": 0.0,
+  "reason": "one sentence"
 }
 
 Rules:
-- Use only functions listed below.
-- If no clear plugin function applies, set route="none".
-- Prefer WhatsApp for chat/message-summary intents.
-- Prefer Tavily for explicit web lookup/search/news/review intents.
-- confidence range 0..1.
+- Only use plugin/function names from the catalog below. Never invent names.
+- route="none" means answer with general LLM knowledge; no plugin is needed.
+- Prefer the most specific function when multiple plugins could apply.
+- Email or inbox queries use the Gmail plugin.
+- Browser navigation, URLs, or page inspection use the Browser plugin.
+- Web search, news, or reviews use the Tavily plugin.
+- Messaging or chat summaries use the WhatsApp plugin.
+- Confidence below 0.55 must use route="none".
 
-Query: ${JSON.stringify(String(query || ""))}
-Heuristic top candidates: ${JSON.stringify(heuristicHints)}
-Available functions: ${JSON.stringify(catalog)}
-`;
+User query: ${JSON.stringify(String(query || ""))}
+Available functions:
+${JSON.stringify(catalog, null, 2)}`;
+}
+
+async function classifyPluginIntentWithLLM(query, obj) {
+    if (!obj || !obj.groq_api) return { isPlugin: false };
+
+    const catalog = buildFunctionCatalog(obj.plugins);
+    if (!catalog.length) return { isPlugin: false };
 
     try {
-        const raw = await obj.customQuery(prompt);
+        const payload = await Promise.race([
+            callGroqSMALL(buildRoutingPrompt(query, catalog), obj.groq_api),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("LLM routing timeout")), 5000))
+        ]);
+        const raw = extractGroqContent(payload);
         const match = String(raw || "").match(/\{[\s\S]*\}/);
-        if (!match) return null;
+        if (!match) return { isPlugin: false };
         const parsed = JSON.parse(match[0]);
         if (String(parsed.route || "").toLowerCase() !== "plugin") return { isPlugin: false };
 
         const resolved = findPluginFunction(obj.plugins, parsed.plugin, parsed.function);
-        if (!resolved) return null;
+        if (!resolved) return { isPlugin: false };
 
         return {
             isPlugin: true,
@@ -347,41 +88,17 @@ Available functions: ${JSON.stringify(catalog)}
             confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0)),
             via: "llm"
         };
-    } catch (_) {
-        return null;
+    } catch (err) {
+        console.warn("[pluginRouter] LLM routing failed:", err.message);
+        return { isPlugin: false };
     }
 }
 
 async function resolvePluginIntent(query, obj) {
-    const emailDirect = resolveEmailDirectIntent(query, obj?.plugins || []);
-    if (emailDirect) {
-        return emailDirect;
-    }
-
-    const browserDirect = resolveBrowserDirectIntent(query, obj?.plugins || []);
-    if (browserDirect) {
-        return browserDirect;
-    }
-
-    const guarded = resolveGuardedIntent(query, obj?.plugins || []);
-    if (guarded) {
-        return guarded;
-    }
-
-    const heuristic = checkPlugins(query, obj);
-    if (!shouldUseLLMClassifier(heuristic)) {
-        return { ...heuristic, via: "heuristic" };
-    }
-
-    const llm = await classifyPluginIntentWithLLM(query, obj, heuristic);
+    const llm = await classifyPluginIntentWithLLM(query, obj);
     if (llm?.isPlugin && llm.confidence >= 0.55) {
         return llm;
     }
-
-    if (heuristic?.isPlugin && heuristic.confidence >= 0.45) {
-        return { ...heuristic, via: "heuristic_fallback" };
-    }
-
     return { isPlugin: false };
 }
 
@@ -440,7 +157,8 @@ async function handlePluginFollowUp(query, obj) {
             if (result && !result.handled && typeof result.rewrittenQuery === "string" && result.rewrittenQuery.trim()) {
                 rewrittenQuery = result.rewrittenQuery.trim();
             }
-        } catch (_) {
+        } catch (err) {
+            console.warn(`[followUp] Plugin ${plugin?.data?.name || "unknown"} failed:`, err.message);
         }
     }
 
@@ -448,7 +166,6 @@ async function handlePluginFollowUp(query, obj) {
 }
 
 module.exports = {
-    checkPlugins,
     resolvePluginIntent,
     handlePlugin,
     loadPlugin,
