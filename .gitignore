@@ -12,3 +12,4 @@ plugins/reminder/reminders.json
 reminder.log
 whatsapp-sync.log
 convos.md
+/data/
