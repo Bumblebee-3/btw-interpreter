@@ -128,6 +128,70 @@ async function answer(query,gapi,cp=false,obj) {
     }
 }
 
+async function answerSmall(query,gapi,cp=false,obj) {
+    // Inject history context into the prompt if available
+    if (obj?.messageHistory) {
+        const history = obj.messageHistory.getAll();
+        if (history.length > 0) {
+            const historyContext = history.map(turn => 
+                `[Conversation history]\n` +
+                `User (${turn.timestamp}): ${turn.userQuery}\n` +
+                `Tool: ${turn.toolName || 'none'}\n` +
+                `Raw data: ${JSON.stringify(turn.rawToolData, null, 2).slice(0, 1200)}\n` +
+                `Response: ${turn.llmFormattedResult.slice(0, 400)}\n` +
+                `[End of history]\n`
+            ).join("\n");
+            
+            query = `${historyContext}\nCurrent query: ${query}`;
+        }
+    }
+
+    if(!obj.db.dbPath){
+        var prompt;
+        if (cp == false) prompt = "You are a helpful voice assistant named Bumblebee. Answer the user's question concisely in one or two sentences. Avoid markdown; output plain text only. This text is going to be parsed into a tts tool, so keep it easy to read. Here is the query: "+query;
+        else prompt = query;
+        const data = await callGroq(prompt, gapi);
+        return extractGroqContent(data);
+    } else {
+        let answer = await obj.db.searchDB(query,10,obj.table_config);
+        let string = "\n";
+        for (const i in answer) {
+            string += `${answer[i].text} (similarity score: ${answer[i].similarity})\n`
+        }
+        //console.log(string);
+        const prompt =
+            "You are Bumblebee, a helpful voice assistant made by Hridhuun Savant. " +
+            "Answer concisely in 1-2 sentences. " +
+            "Plain text only. No markdown. " +
+            "Output will be used for TTS, so keep it clear and easy to read. " +
+            "Use retrieved knowledge below, prioritizing higher similarity scores. " +
+            "Ignore it if irrelevant.\n" +
+            "Retrieved Context:\n" +
+            string + "\n" +
+            "Query: " + query;
+
+        const res = await fetch(
+            "https://api.groq.com/openai/v1/chat/completions",
+            {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${gapi}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "openai/gpt-oss-20b",
+                    messages: [
+                        { role: "user", content: prompt }
+                    ]
+                })
+            }
+        );
+
+        const data = await res.json();
+        return extractGroqContent(data);
+    }
+}
+
 
 async function plugin_answer(query,gapi,func,data,ctx) {
     // Inject history context into the prompt if available
@@ -165,4 +229,5 @@ async function plugin_answer(query,gapi,func,data,ctx) {
 }
 
 
-module.exports = {answer,plugin_answer,rewriteQuery,callGroq,extractGroqContent,callGroqSMALL};
+
+module.exports = {answer,answerSmall,plugin_answer,rewriteQuery,callGroq,extractGroqContent,callGroqSMALL};
