@@ -1,7 +1,11 @@
+
 const lancedb = require("@lancedb/lancedb");
 const path = require("path");
 const crypto = require("crypto");
 const { pipeline } = require("@xenova/transformers");
+const { chunkText } = require("./textChunker");
+const { extractTextFromFile } = require("./fileExtractor");
+const { crawlUrl } = require("./urlExtractor");
 
 class LanceDBWrapper {
   constructor(options = {}) {
@@ -54,6 +58,8 @@ class LanceDBWrapper {
         {
           id: "init",
           text: "init",
+          source: "",
+          chunk_index: 0,
           vector: dummyVector,
         },
       ],
@@ -62,6 +68,12 @@ class LanceDBWrapper {
 
     await table.delete("id = 'init'");
     console.log(`Table "${tableName}" created.`);
+  }
+
+  async ensureTable(tableName) {
+    await this.init();
+    const tables = await this.db.tableNames();
+    if (!tables.includes(tableName)) await this.createTable(tableName);
   }
 
   async addToTable(tableName, text, id = null) {
@@ -77,6 +89,85 @@ class LanceDBWrapper {
         vector,
       },
     ]);
+  }
+
+  async addFileToTable(tableName, filePath, options = {}) {
+    await this.ensureTable(tableName);
+    const { text, metadata } = await extractTextFromFile(filePath);
+    if (!text.trim()) throw new Error(`No extractable text found in file: ${filePath}`);
+
+    const chunks = chunkText(text, options);
+    if (!chunks.length) throw new Error(`File produced no usable chunks after extraction: ${filePath}`);
+    const table = await this.db.openTable(tableName);
+    const prefix = options.prefix ? String(options.prefix) : "";
+    let inserted = 0;
+    let skipped = 0;
+
+    for (let index = 0; index < chunks.length; index++) {
+      const fullText = prefix + chunks[index];
+      const id = `file:${metadata.filename}:chunk:${index}:${Buffer.from(fullText.slice(0, 40)).toString("hex").slice(0, 12)}`;
+      try {
+        await table.add([{
+          id,
+          text: fullText,
+          source: metadata.source,
+          chunk_index: index,
+          vector: await this.generateEmbedding(fullText),
+        }]);
+        inserted++;
+      } catch (error) {
+        console.warn(`[LanceDB] Failed to insert chunk ${index} from ${filePath}: ${error.message}`);
+        skipped++;
+      }
+    }
+    return { inserted, skipped, source: metadata.source, chunks: chunks.length };
+  }
+
+  async addUrlToTable(tableName, url, options = {}) {
+    await this.ensureTable(tableName);
+    const maxPages = options.maxPages ?? 1;
+    const pages = await crawlUrl(url, {
+      maxPages,
+      maxDepth: options.maxDepth ?? (maxPages === 1 ? 0 : 1),
+      allowedPathPrefixes: options.allowedPathPrefixes,
+    });
+    if (!pages.length) throw new Error(`No content could be extracted from URL: ${url}`);
+
+    const table = await this.db.openTable(tableName);
+    const prefix = options.prefix ? String(options.prefix) : "";
+    let inserted = 0;
+    let skipped = 0;
+    for (const page of pages) {
+      const chunks = chunkText(page.text, options);
+      for (let index = 0; index < chunks.length; index++) {
+        const context = page.title ? `[${page.title}] ` : "";
+        const fullText = prefix + context + chunks[index];
+        const id = `url:${encodeURIComponent(page.url).slice(0, 60)}:chunk:${index}:${Buffer.from(fullText.slice(0, 40)).toString("hex").slice(0, 12)}`;
+        try {
+          await table.add([{
+            id,
+            text: fullText,
+            source: page.url,
+            chunk_index: index,
+            vector: await this.generateEmbedding(fullText),
+          }]);
+          inserted++;
+        } catch (error) {
+          console.warn(`[LanceDB] Failed to insert chunk ${index} from ${page.url}: ${error.message}`);
+          skipped++;
+        }
+      }
+    }
+    return { inserted, skipped, pages: pages.length };
+  }
+
+  async deleteBySource(tableName, source) {
+    await this.init();
+    if (!(await this.db.tableNames()).includes(tableName)) return 0;
+    const table = await this.db.openTable(tableName);
+    const escaped = String(source || "").replace(/'/g, "''");
+    await table.delete(`source = '${escaped}'`);
+    return undefined;
   }
 
   async queryTable(tableName, queryText, limit = 5) {

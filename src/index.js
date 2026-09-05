@@ -98,6 +98,24 @@ class Interpreter {
         this.db = db;
         this.table_config = table_config;
     }
+    async addFileToTable(tableName, filePath, options = {}) {
+        if (!this.db || typeof this.db.addFileToTable !== "function") {
+            throw new Error("Database not initialized. Call loadDB() first.");
+        }
+        return await this.db.addFileToTable(tableName, filePath, options);
+    }
+    async addUrlToTable(tableName, url, options = {}) {
+        if (!this.db || typeof this.db.addUrlToTable !== "function") {
+            throw new Error("Database not initialized. Call loadDB() first.");
+        }
+        return await this.db.addUrlToTable(tableName, url, options);
+    }
+    async deleteBySource(tableName, source) {
+        if (!this.db || typeof this.db.deleteBySource !== "function") {
+            throw new Error("Database not initialized. Call loadDB() first.");
+        }
+        return await this.db.deleteBySource(tableName, source);
+    }
     initReminderSystem(options = {}){
         const ReminderManager = require("./reminders/ReminderManager.js");
         this.reminderManager = new ReminderManager(options);
