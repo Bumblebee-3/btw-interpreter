@@ -2,7 +2,7 @@ const R = require('./response.js');
 const { loadPlugin } = require("./pluginHandler.js");
 const { answer, answerSmall } = require("./groq.js");
 
-// ─── Normalization (unchanged, just data prep) ───────────────────────────────
+// ─── Normalization ────────────────────────────────────────────────────────────
 
 function asParamDescriptor(param) {
   if (typeof param === "string") {
@@ -72,13 +72,10 @@ function parseJsonObject(raw) {
 }
 
 // ─── Core AI call ─────────────────────────────────────────────────────────────
-//
-// Everything flows through here. The AI receives full context and returns a
-// single structured decision. No regex, no keyword scoring — the model decides.
 
 async function callWorkflowAI(systemPrompt, userMessage, obj) {
-  const raw = await obj.customQuery(`${systemPrompt}\n\nUser: ${userMessage}`);
-  
+  const raw = await obj.customQuery(`${systemPrompt}\n\nUser: ${userMessage}`, "openai/gpt-oss-20b");
+
   const parsed = parseJsonObject(raw);
   if (process.env.BTW_WORKFLOW_DEBUG === "1") {
     console.debug("[workflow:ai] raw →", raw?.slice?.(0, 300));
@@ -90,14 +87,38 @@ async function callWorkflowAI(systemPrompt, userMessage, obj) {
 function buildSystemPrompt(catalogue, activeState) {
   const catalogueText = JSON.stringify(catalogue, null, 2);
 
+  // Build a human-readable summary of collected params so the AI understands
+  // what has already been confirmed — critical for draft selection flows.
+  let collectedSummary = "";
+  if (activeState) {
+    const collected = Object.entries(activeState.params)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `  - ${k}: ${JSON.stringify(v)}`)
+      .join("\n");
+    collectedSummary = collected
+      ? `\nAlready confirmed values:\n${collected}`
+      : "\nNo values confirmed yet.";
+  }
+
+  // FIX 1: When a workflow is active, make it crystal-clear to the AI that
+  // vague/conversational messages are CONTINUATION turns, never "none".
+  // Also expose the pending drafts if any, so the AI can resolve them.
+  const pendingDrafts = activeState?.pendingDrafts
+    ? `\nPending draft options offered to the user:\n${JSON.stringify(activeState.pendingDrafts, null, 2)}\nIf the user picks one (by number, "first option", "option 2", etc.) extract the corresponding values.`
+    : "";
+
   const activeBlock = activeState
     ? `
-## Active Workflow
-You are currently mid-way through a workflow. Here is the state:
-- Workflow: ${activeState.workflow.name}
-- Plugin: ${activeState.plugin?.data?.name || "unknown"}
-- Collected params so far: ${JSON.stringify(activeState.params, null, 2)}
+## Active Workflow — YOU ARE MID-CONVERSATION
+A workflow is in progress. EVERY user message must be treated as a continuation of this
+workflow unless the user explicitly says "cancel", "stop", or "never mind".
+Do NOT return "none" when a workflow is active.
+
+- Workflow : ${activeState.workflow.name}
+- Plugin   : ${activeState.plugin?.data?.name || "unknown"}
 - Still missing (required): ${JSON.stringify(getMissingRequired(activeState).map(p => p.name))}
+${collectedSummary}
+${pendingDrafts}
 `
     : `## No workflow is currently active.`;
 
@@ -112,7 +133,7 @@ ${catalogueText}
 ## Your task
 Analyze the user's message and return a JSON object with ONE of the following actions:
 
-### If the user wants to START a new workflow:
+### If NO workflow is active and the user wants to START a new one:
 {
   "action": "start",
   "plugin_name": "<plugin name>",
@@ -121,19 +142,21 @@ Analyze the user's message and return a JSON object with ONE of the following ac
   "message": "<optional friendly acknowledgement, or null>"
 }
 
-### If a workflow is active and the user is PROVIDING info / continuing:
+### If a workflow IS active and the user is PROVIDING info / selecting a draft / continuing:
 {
   "action": "continue",
-  "values": { "<param>": "<extracted value or null>" },
+  "values": { "<param>": "<extracted value>" },
   "message": null
 }
 
-### If you need more information from the user (ask naturally, not like a form):
+### If you need to ask the user for more info (ask naturally):
 {
   "action": "ask",
-  "values": { "<param>": "<any values you DID extract from this message, or omit>" },
-  "message": "<your friendly question>"
+  "values": { "<param>": "<any values you DID extract from this message>" },
+  "message": "<your friendly question or draft options>",
+  "drafts": { "<param_name>": ["<option 1 text>", "<option 2 text>"] }
 }
+(Include "drafts" only when you offer multiple options for a param so the system can store them.)
 
 ### If the user wants to CANCEL the current workflow:
 {
@@ -141,28 +164,31 @@ Analyze the user's message and return a JSON object with ONE of the following ac
   "message": "Sure, I've cancelled that. What else can I help you with?"
 }
 
-### If the user wants to EXECUTE (all params are collected):
+### If a workflow IS active and ALL required params are now collected:
 {
   "action": "execute",
-  "values": { "<param>": "<any final values extracted from this message, or omit>" },
+  "values": { "<param>": "<any final values extracted from this message>" },
   "message": null
 }
 
-### If the message is not related to any workflow at all:
+### If NO workflow is active and the message is unrelated to any workflow:
 {
   "action": "none",
   "message": null
 }
 
 ## Rules
-- Be warm and conversational. When asking for missing info, phrase it naturally ("Who should I send this to?" not "Please provide recipient").
-- Extract as many param values from the user's message as possible in one pass.
-- If only one param is missing and the user's message clearly contains it, map it directly without asking again.
-- If the user says things like "idk", "help me write", "suggest something" — offer 2 short draft options in your "ask" message and tell them to pick one or edit it.
-- Never expose internal workflow names or param names to the user. Talk like a person.
-- If you're unsure whether the user wants a workflow or just chatting, return "none".
-- CRITICAL: When the user confirms or says "send it", "go ahead", "do it", "yes", "perfect" and all params are collected — return "execute". NEVER narrate the action with a "text" response. The system will handle sending; your job is only to return the JSON.
-- CRITICAL: When the user picks a draft option and edits it (e.g. "option 1 but change X to Y"), extract the final edited param values into "values" and return action "continue" or "ask" for the next missing param. Do NOT lose those values.
+- CRITICAL: If a workflow is active, NEVER return "none". Return "continue", "ask", or "execute".
+- Be warm and conversational. When asking for missing info, phrase it naturally.
+- Extract as many param values as possible in one pass.
+- When the user picks a numbered draft option (e.g. "first option", "option 2", "1"), look up
+  the corresponding text from the pendingDrafts block above and emit it as the param value.
+- If the user says things like "idk", "help me write", "suggest something" — offer 2 short
+  draft options in your "ask" message and populate the "drafts" field with the options keyed
+  by param name so they can be stored.
+- Never expose internal workflow names or param names to the user.
+- When the user confirms (inputs like, but not limited to "send it", "go ahead", "yes", "perfect") and all params are
+  collected — return "execute". Never narrate the action.
 - Return ONLY the JSON object. No preamble, no markdown fences.
 `.trim();
 }
@@ -181,7 +207,7 @@ function initializeWorkflowState(plugin, workflow) {
   for (const p of [...workflow.required_params, ...workflow.optional_params]) {
     params[p.name] = undefined;
   }
-  return { plugin, workflow, params, startedAt: Date.now() };
+  return { plugin, workflow, params, startedAt: Date.now(), pendingDrafts: null };
 }
 
 function mergeValues(state, values) {
@@ -201,6 +227,51 @@ function mergeValues(state, values) {
   }
 }
 
+// FIX 2: Resolve a draft option selection from user input.
+// Returns a values object if a selection was made, or null.
+function resolveDraftSelection(input, pendingDrafts) {
+  if (!pendingDrafts || typeof pendingDrafts !== "object") return null;
+
+  const raw = String(input || "").trim().toLowerCase();
+  if (!raw) return null;
+
+  // Map words/numbers → 0-based index
+  const ordinalMap = {
+    "1": 0, "one": 0, "first": 0, "option 1": 0, "option one": 0, "option1": 0,
+    "2": 1, "two": 1, "second": 1, "option 2": 1, "option two": 1, "option2": 1,
+    "3": 2, "three": 2, "third": 2, "option 3": 2, "option three": 2, "option3": 2,
+    "4": 3, "four": 3, "fourth": 3, "option 4": 3, "option four": 3, "option4": 3,
+    "5": 4, "five": 4, "fifth": 4, "option 5": 4, "option five": 4, "option5": 4,
+  };
+
+  // Try to find a matching index
+  let idx = null;
+  for (const [key, val] of Object.entries(ordinalMap)) {
+    if (raw === key || raw.startsWith(key + " ") || raw.startsWith(key + ",") || raw.startsWith(key + ".")) {
+      idx = val;
+      break;
+    }
+  }
+  // Also try bare digits at start of string
+  if (idx === null) {
+    const digitMatch = raw.match(/^(\d+)/);
+    if (digitMatch) idx = parseInt(digitMatch[1], 10) - 1;
+  }
+
+  if (idx === null) return null;
+
+  const resolved = {};
+  let anyResolved = false;
+  for (const [paramName, options] of Object.entries(pendingDrafts)) {
+    if (Array.isArray(options) && idx < options.length) {
+      resolved[paramName] = options[idx];
+      anyResolved = true;
+    }
+  }
+
+  return anyResolved ? resolved : null;
+}
+
 async function applyPluginPrefill(state, obj, input) {
   try {
     const instance = loadPlugin(state.plugin, state.plugin.params);
@@ -218,6 +289,58 @@ async function applyPluginPrefill(state, obj, input) {
   }
 }
 
+// applyPluginResolveParams: called after every prefill + merge cycle.
+// Gives plugins a chance to asynchronously resolve param values (e.g. look up
+// a contact by name) before the workflow handler decides what to ask the user.
+//
+// Return values from plugin.resolveParams:
+//   { resolved: { paramName: value } }         → auto-fill and continue
+//   { needs_input: true, field, message,        → surface to user; clears the
+//     candidates? }                               bad field so it stays missing
+//   {} or undefined                             → nothing to do
+//
+// Returns: { ok: true } if all good, or { ok: false, field, message, candidates? }
+async function applyPluginResolveParams(state, obj) {
+  try {
+    const instance = loadPlugin(state.plugin, state.plugin.params);
+    if (typeof instance.resolveParams !== "function") return { ok: true };
+
+    const result = await instance.resolveParams({
+      workflow: state.workflow.name,
+      params: { ...state.params }
+    });
+
+    if (!result || typeof result !== "object") return { ok: true };
+
+    // Plugin resolved one or more values automatically
+    if (result.resolved && typeof result.resolved === "object") {
+      mergeValues(state, result.resolved);
+    }
+
+    // Plugin needs user input (disambiguation, missing contact, etc.)
+    if (result.needs_input) {
+      const field = result.field;
+      // Clear the unresolvable value so it stays in getMissingRequired
+      if (field && Object.prototype.hasOwnProperty.call(state.params, field)) {
+        state.params[field] = undefined;
+      }
+      // Store candidates for the Gmail recipient-picker flow
+      if (Array.isArray(result.candidates) && result.candidates.length > 0) {
+        state.params._recipientCandidates = result.candidates;
+      }
+      return { ok: false, field, message: result.message, candidates: result.candidates };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    // resolveParams errors are non-fatal; don't crash the workflow
+    if (process.env.BTW_WORKFLOW_DEBUG === "1") {
+      console.warn("[workflow:resolveParams] error:", err.message);
+    }
+    return { ok: true };
+  }
+}
+
 async function executeWorkflow(state, obj, input) {
   const instance = loadPlugin(state.plugin, state.plugin.params);
   const method = state.workflow.execute;
@@ -228,7 +351,6 @@ async function executeWorkflow(state, obj, input) {
 }
 
 function handleExecutionResult(state, obj, result) {
-  // Plugin may signal it needs more input (e.g. disambiguation)
   if (result && typeof result === "object" && result.status === "needs_input") {
     const field = result.field;
     if (field && Object.prototype.hasOwnProperty.call(state.params, field)) {
@@ -249,17 +371,139 @@ function findPluginAndWorkflow(obj, pluginName, workflowName) {
     for (const raw of workflows) {
       const wf = normalizeWorkflow(raw);
       if (wf.name === workflowName) {
-        // loose plugin name match so the AI doesn't need to be pixel-perfect
         const pName = String(plugin?.data?.name || plugin?.name || "").toLowerCase();
         if (!pluginName || pName.includes(pluginName.toLowerCase()) || pluginName.toLowerCase().includes(pName)) {
           return { plugin, workflow: wf };
         }
-        // fallback: if workflow name uniquely identifies it, accept anyway
         return { plugin, workflow: wf };
       }
     }
   }
   return null;
+}
+
+// ─── Combined prefill + resolve helper ───────────────────────────────────────
+// Runs prefillWorkflowParams then resolveParams. If resolve signals needs_input,
+// returns { earlyReturn: { handled: true, response: message } } so callers can
+// short-circuit immediately. Otherwise returns { earlyReturn: null }.
+
+async function prefillAndResolve(state, obj, input, catalogue) {
+  await applyPluginPrefill(state, obj, input);
+  const resolved = await applyPluginResolveParams(state, obj);
+  if (!resolved.ok) {
+    // Plugin needs the user to pick/provide something before we can continue
+    return {
+      earlyReturn: { handled: true, response: resolved.message }
+    };
+  }
+  return { earlyReturn: null };
+}
+
+// ─── Detect whether the user is asking for suggestions ───────────────────────
+
+function isSuggestSignal(text) {
+  const t = String(text || "").toLowerCase().trim();
+  return (
+    t === "idk" || t === "idk man" || t === "dunno" || t === "no idea" ||
+    /\b(suggest|suggestion|recommend|idea|ideas|help me|don.?t know|not sure|anything|whatever|you choose|your choice|pick one|you pick)\b/.test(t)
+  );
+}
+
+// ─── Focused draft generator ──────────────────────────────────────────────────
+// Called when the main AI announces options but doesn't include them.
+// Makes one targeted call whose only job is to produce 2 concrete options.
+
+async function generateDrafts(state, obj, missingParam) {
+  const collectedContext = Object.entries(state.params)
+    .filter(([k, v]) => v !== undefined && v !== null && v !== "" && !k.startsWith("_"))
+    .map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`)
+    .join("\n") || "  (none yet)";
+
+  const lines = [
+    `You are helping a user compose something. Generate exactly 2 short concrete options for the "${missingParam.name}" field.`,
+    ``,
+    `Workflow context (already collected):`,
+    collectedContext,
+    ``,
+    `Field needed: ${missingParam.name} — ${missingParam.description}`,
+    ``,
+    `Return ONLY valid JSON, no markdown, no explanation:`,
+    `{`,
+    `  "option1": "<complete usable text for option 1>",`,
+    `  "option2": "<complete usable text for option 2>",`,
+    `  "message": "Here are two options — pick one or tell me what to change: 1. <option1 text>  2. <option2 text>"`,
+    `}`,
+    ``,
+    `Rules:`,
+    `- Each option must be a complete usable value, NOT a description of a value`,
+    `- The message must literally contain both option texts so the user can read and pick`,
+    `- Options should be distinct from each other`,
+  ];
+
+  try {
+    const raw = await obj.customQuery(lines.join("\n"), "openai/gpt-oss-20b");
+    const parsed = parseJsonObject(raw);
+    if (parsed?.option1 && parsed?.option2) {
+      const msg = parsed.message ||
+        `Here are two options — pick one or tell me what to change:\n1. ${parsed.option1}\n2. ${parsed.option2}`;
+      return { message: msg, drafts: { [missingParam.name]: [parsed.option1, parsed.option2] } };
+    }
+  } catch (_) { /* fall through */ }
+
+  return null;
+}
+
+// ─── Ask a follow-up question for a missing param ────────────────────────────
+
+async function askForMissingParam(catalogue, state, obj, missingParam, userInput) {
+  const userSaid = String(userInput || "").trim();
+  const wantsSuggestions = isSuggestSignal(userSaid);
+
+  // Fast path: user clearly wants suggestions — skip the routing AI and go
+  // straight to the focused generator, which always returns real content.
+  if (wantsSuggestions) {
+    const drafts = await generateDrafts(state, obj, missingParam);
+    if (drafts) {
+      state.pendingDrafts = drafts.drafts;
+      return drafts.message;
+    }
+  }
+
+  // Normal path: ask the routing AI.
+  const askPrompt = buildSystemPrompt(catalogue, state);
+  const syntheticMsg = userSaid
+    ? `User said: "${userSaid}"\nStill need: ${missingParam.name} (${missingParam.description}). ` +
+      `Respond with action "ask". If offering draft options you MUST include both option texts ` +
+      `literally inside "message" AND set drafts:{"${missingParam.name}":["text1","text2"]}.`
+    : `The workflow is in progress. Ask the user naturally for: ${missingParam.name} — ${missingParam.description}`;
+
+  const askDecision = await callWorkflowAI(askPrompt, syntheticMsg, obj);
+
+  // Detect "announced options but didn't populate drafts" pattern.
+  const hasDraftsField = !!(askDecision?.drafts && typeof askDecision.drafts === "object" &&
+    Object.keys(askDecision.drafts).length > 0);
+  const messageSuggestsOptions = /\b(option|idea|suggestion|draft|here are|choose|pick)\b/i.test(
+    String(askDecision?.message || "")
+  );
+
+  if (messageSuggestsOptions && !hasDraftsField) {
+    // AI announced options but didn't generate them — use focused generator as fallback.
+    const drafts = await generateDrafts(state, obj, missingParam);
+    if (drafts) {
+      state.pendingDrafts = drafts.drafts;
+      return drafts.message;
+    }
+  }
+
+  if (hasDraftsField) {
+    state.pendingDrafts = askDecision.drafts;
+  } else {
+    state.pendingDrafts = null;
+  }
+
+  if (askDecision?.values) mergeValues(state, askDecision.values);
+
+  return askDecision?.message || `What should the ${missingParam.name} be?`;
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -271,13 +515,33 @@ async function handleWorkflowInput(input, obj) {
   if (catalogue.length === 0) return { handled: false };
 
   const activeState = obj.workflowState || null;
+
+  // FIX 4: Before hitting the AI, try to resolve a draft selection locally.
+  // This avoids the AI misinterpreting "first option" as a plain continuation
+  // and losing the stored draft texts.
+  if (activeState?.pendingDrafts) {
+    const draftValues = resolveDraftSelection(input, activeState.pendingDrafts);
+    if (draftValues) {
+      mergeValues(activeState, draftValues);
+      activeState.pendingDrafts = null; // drafts consumed
+
+      const missing = getMissingRequired(activeState);
+      if (missing.length > 0) {
+        const msg = await askForMissingParam(catalogue, activeState, obj, missing[0]);
+        return { handled: true, response: msg };
+      }
+
+      const result = await executeWorkflow(activeState, obj, input);
+      return handleExecutionResult(activeState, obj, result);
+    }
+  }
+
   const systemPrompt = buildSystemPrompt(catalogue, activeState);
 
   let decision;
   try {
     decision = await callWorkflowAI(systemPrompt, input, obj);
   } catch (err) {
-    // If AI fails, fall through so BTW's normal response path handles it
     return { handled: false };
   }
 
@@ -286,53 +550,86 @@ async function handleWorkflowInput(input, obj) {
   // ── CANCEL ────────────────────────────────────────────────────────────────
   if (decision.action === "cancel") {
     obj.workflowState = null;
-    return {
-      handled: true,
-      response: decision.message || "No problem, cancelled that."
-    };
+    return { handled: true, response: decision.message || "No problem, cancelled that." };
   }
 
-  // ── NONE (not a workflow query) ───────────────────────────────────────────
+  // ── NONE (no active workflow, unrelated message) ──────────────────────────
   if (decision.action === "none") {
-    return { handled: false };
+    if (activeState) {
+      // AI returned "none" mid-workflow — missed the continuation.
+      // Re-run as a targeted ask, passing the ORIGINAL user message so the
+      // AI can respond to "idk"/"suggest" signals with actual draft content.
+      const missing = getMissingRequired(activeState);
+      if (missing.length > 0) {
+        const msg = await askForMissingParam(catalogue, activeState, obj, missing[0], input);
+        return { handled: true, response: msg };
+      }
+      const result = await executeWorkflow(activeState, obj, input);
+      return handleExecutionResult(activeState, obj, result);
+    } else {
+      return { handled: false };
+    }
   }
 
-  // ── ASK (AI needs more info / wants to clarify) ───────────────────────────
+  // ── ASK (AI needs more info / offering drafts) ────────────────────────────
   if (decision.action === "ask") {
-    // Commit any param values the AI extracted alongside the question.
-    // This is critical for the draft-selection flow: the AI confirms chosen
-    // subject/body text AND asks a follow-up, but the values must be stored
-    // or they'll be lost when the next message comes in.
-    if (activeState && decision.values && typeof decision.values === "object") {
-      mergeValues(activeState, decision.values);
+    const state = activeState;
+    if (state) {
+      if (decision.values && typeof decision.values === "object") {
+        mergeValues(state, decision.values);
+      }
+      if (decision.drafts && typeof decision.drafts === "object") {
+        state.pendingDrafts = decision.drafts;
+      } else {
+        state.pendingDrafts = null;
+      }
     }
-    return {
-      handled: true,
-      response: decision.message || "Can you give me a bit more detail?"
-    };
+    return { handled: true, response: decision.message || "Can you give me a bit more detail?" };
   }
 
   // ── START (new workflow detected) ─────────────────────────────────────────
   if (decision.action === "start") {
+    // FIX 7: If a workflow is already active, don't silently nuke it.
+    // Finish or ask about the current one first, unless the user clearly wants
+    // to switch (we detect that by checking for a different workflow name).
+    if (activeState) {
+      const sameWorkflow =
+        decision.workflow_name === activeState.workflow.name &&
+        (decision.plugin_name || "").toLowerCase() ===
+          (activeState.plugin?.data?.name || "").toLowerCase();
+
+      if (!sameWorkflow) {
+        // The user is switching workflows mid-session.
+        // Finish the old one if all params are ready; otherwise drop it.
+        const missing = getMissingRequired(activeState);
+        if (missing.length === 0) {
+          // Execute the pending workflow first, then start the new one
+          const result = await executeWorkflow(activeState, obj, input);
+          obj.workflowState = null;
+          // We don't return here — fall through to start the new workflow below
+          // (the result will be lost but that's an acceptable trade-off; the
+          //  alternative is queueing workflows which is much more complex.)
+          // TODO: queue the result and return both
+        } else {
+          // Just drop the incomplete old workflow silently
+          obj.workflowState = null;
+        }
+      }
+    }
+
     const found = findPluginAndWorkflow(obj, decision.plugin_name, decision.workflow_name);
-    if (!found) return { handled: false }; // AI hallucinated a workflow that doesn't exist
+    if (!found) return { handled: false };
 
     const state = initializeWorkflowState(found.plugin, found.workflow);
     obj.workflowState = state;
 
     mergeValues(state, decision.values);
-    await applyPluginPrefill(state, obj, input);
+    const startResolve = await prefillAndResolve(state, obj, input, catalogue);
+    if (startResolve.earlyReturn) return startResolve.earlyReturn;
 
     const missing = getMissingRequired(state);
     if (missing.length > 0) {
-      // Re-ask AI for a friendly question about the first missing param
-      const askPrompt = buildSystemPrompt(catalogue, state);
-      const askDecision = await callWorkflowAI(
-        askPrompt,
-        `The workflow started. Ask the user for: ${missing[0].name} (${missing[0].description})`,
-        obj
-      );
-      const msg = askDecision?.message || `What's the ${missing[0].name}?`;
+      const msg = await askForMissingParam(catalogue, state, obj, missing[0], input);
       return { handled: true, response: msg };
     }
 
@@ -342,24 +639,21 @@ async function handleWorkflowInput(input, obj) {
 
   // ── CONTINUE (active workflow, user gave more info) ───────────────────────
   if (decision.action === "continue") {
-    if (!activeState) {
-      // State was unexpectedly cleared (e.g. after a plugin needs_input round).
-      // Nothing we can do without a state object — fall through.
-      return { handled: false };
-    }
+    if (!activeState) return { handled: false };
 
     mergeValues(activeState, decision.values);
-    await applyPluginPrefill(activeState, obj, input);
+
+    // FIX 8: Clear stale pending drafts when user gives explicit values
+    if (decision.values && Object.keys(decision.values).length > 0) {
+      activeState.pendingDrafts = null;
+    }
+
+    const continueResolve = await prefillAndResolve(activeState, obj, input, catalogue);
+    if (continueResolve.earlyReturn) return continueResolve.earlyReturn;
 
     const missing = getMissingRequired(activeState);
     if (missing.length > 0) {
-      const askPrompt = buildSystemPrompt(catalogue, activeState);
-      const askDecision = await callWorkflowAI(
-        askPrompt,
-        `Still missing: ${missing[0].name} (${missing[0].description}). Ask the user for it.`,
-        obj
-      );
-      const msg = askDecision?.message || `Just need one more thing — ${missing[0].description}`;
+      const msg = await askForMissingParam(catalogue, activeState, obj, missing[0], input);
       return { handled: true, response: msg };
     }
 
@@ -369,27 +663,22 @@ async function handleWorkflowInput(input, obj) {
 
   // ── EXECUTE (AI says all params are ready) ────────────────────────────────
   if (decision.action === "execute") {
-    if (!activeState) {
-      return { handled: false };
-    }
+    if (!activeState) return { handled: false };
 
-    // Merge any last-minute values the AI included with the execute decision
     if (decision.values && typeof decision.values === "object") {
       mergeValues(activeState, decision.values);
     }
 
-    await applyPluginPrefill(activeState, obj, input);
+    // FIX 9: Clear pending drafts on execute
+    activeState.pendingDrafts = null;
+
+    const executeResolve = await prefillAndResolve(activeState, obj, input, catalogue);
+    if (executeResolve.earlyReturn) return executeResolve.earlyReturn;
 
     const missing = getMissingRequired(activeState);
     if (missing.length > 0) {
-      // Safety net — AI said execute but params aren't actually all there yet
-      const askPrompt = buildSystemPrompt(catalogue, activeState);
-      const askDecision = await callWorkflowAI(
-        askPrompt,
-        `Still missing: ${missing[0].name} (${missing[0].description}). Ask the user for it.`,
-        obj
-      );
-      const msg = askDecision?.message || `Just need one more thing — ${missing[0].description}`;
+      // Safety net — AI said execute but params aren't actually all there
+      const msg = await askForMissingParam(catalogue, activeState, obj, missing[0], input);
       return { handled: true, response: msg };
     }
 

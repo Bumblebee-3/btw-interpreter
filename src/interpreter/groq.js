@@ -64,7 +64,7 @@ async function rewriteQuery(prompt, gapi) {
 }
 
 
-async function answer(query,gapi,cp=false,obj) {
+async function answer(query,gapi,cp=false,obj,model="openai/gpt-oss-120b") {
     // Inject history context into the prompt if available
     if (obj?.messageHistory) {
         const history = obj.messageHistory.getAll();

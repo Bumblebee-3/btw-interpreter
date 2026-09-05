@@ -275,28 +275,77 @@ class Gmail {
     }
 
     async prefillWorkflowParams({ workflow, input, params }) {
-        if (workflow !== "send_email") {
-            return {};
-        }
-
-        const parsed = parseEmailDraftIntentFromInput(input || "");
-        if (!parsed) {
-            return {};
-        }
+        if (workflow !== "send_email") return {};
 
         const next = {};
-        if ((!params?.recipient || !String(params.recipient).trim()) && parsed.recipient) {
-            next.recipient = parsed.recipient;
+        const raw = String(input || "").trim();
+
+        // Case 1: full structured sentence with body
+        const fullPattern = /(?:write|send|compose|draft)\s+(?:an?\s+)?(?:email|mail|message)\s+to\s+(.+?)\s+(?:regarding|about|subject\s*:?\s*)\s+(.+?)\s+(?:saying|body\s*:?\s*)\s+([\s\S]+)$/i;
+        const fullMatch = raw.match(fullPattern);
+        if (fullMatch) {
+            const r = String(fullMatch[1] || "").trim();
+            const s = String(fullMatch[2] || "").trim().replace(/[.!?]+$/g, "");
+            const b = String(fullMatch[3] || "").trim();
+            if (r && (!params?.recipient || !String(params.recipient).trim())) next.recipient = r;
+            if (s && (!params?.subject || !String(params.subject).trim())) next.subject = s;
+            if (b && (!params?.body || !String(params.body).trim())) next.body = b;
+            return next;
         }
-        if ((!params?.subject || !String(params.subject).trim()) && parsed.subject) {
-            next.subject = parsed.subject;
+
+        // Case 2: recipient + subject, no body
+        const subjectPattern = /(?:write|send|compose|draft)\s+(?:an?\s+)?(?:email|mail|message)\s+to\s+(.+?)\s+(?:regarding|about|subject\s*:?\s*)\s+([\s\S]+)$/i;
+        const subjectMatch = raw.match(subjectPattern);
+        if (subjectMatch) {
+            const r = String(subjectMatch[1] || "").trim();
+            const s = String(subjectMatch[2] || "").trim().replace(/[.!?]+$/g, "");
+            if (r && (!params?.recipient || !String(params.recipient).trim())) next.recipient = r;
+            if (s && (!params?.subject || !String(params.subject).trim())) next.subject = s;
+            return next;
         }
-        // Intentionally not filling body from vague statements like "regarding ..." so the assistant still asks for explicit body when needed.
-        if ((!params?.body || !String(params.body).trim()) && parsed.body) {
-            next.body = parsed.body;
+
+        // Case 3: simple "write/send/email/mail to <name>"
+        const simpleToPattern = /(?:write|send|compose|draft)?\s*(?:an?\s+)?(?:email|mail|message)?\s*(?:to|for)\s+([A-Za-z][\w\s.'\-]{1,60})(?:\s|$)/i;
+        const simpleMatch = raw.match(simpleToPattern);
+        if (simpleMatch) {
+            const r = String(simpleMatch[1] || "").trim().replace(/[.!?,]+$/g, "");
+            if (r && (!params?.recipient || !String(params.recipient).trim())) {
+                next.recipient = r;
+            }
         }
 
         return next;
+    }
+
+    // Resolves a recipient name before the workflow asks for subject/body.
+    async resolveParams({ workflow, params }) {
+        if (workflow !== "send_email") return {};
+
+        const recipientRaw = String(params?.recipient || "").trim();
+        if (!recipientRaw) return {};
+
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientRaw)) return {};
+
+        const resolution = await this.resolveRecipient(recipientRaw);
+
+        if (resolution.ok) {
+            return { resolved: { recipient: resolution.email } };
+        }
+
+        if (Array.isArray(resolution.candidates) && resolution.candidates.length > 0) {
+            return {
+                needs_input: true,
+                field: "recipient",
+                message: resolution.message,
+                candidates: resolution.candidates
+            };
+        }
+
+        return {
+            needs_input: true,
+            field: "recipient",
+            message: resolution.message
+        };
     }
 
 

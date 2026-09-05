@@ -103,8 +103,8 @@ class Interpreter {
         this.reminderManager = new ReminderManager(options);
         this.reminderManager.start();
     }
-    async customQuery(query){
-        return await answer(query,this.groq_api,true,this);
+    async customQuery(query,model="openai/gpt-oss-120b"){
+        return await answer(query,this.groq_api,true,this,model);
     }
     async customSmallQuery(query){
         return await answerSmall(query,this.groq_api,true,this);
