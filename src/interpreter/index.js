@@ -1,12 +1,12 @@
 const {checkCommands , handleCommand} = require("./commandHandler.js");
 const {resolvePluginIntent , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
 const {handleWorkflowInput} = require("./workflowHandler.js");
-const {answer, rewriteQuery} = require("./groq.js");
+const {answer, rewriteQuery} = require("./llm.js");
 const R = require("./response.js");
 const MessageHistory = require("./messageHistory.js");
 const {buildRewritePrompt, finalizeRewrite, shouldRewriteQuery} = require("./queryRewrite.js");
 
-const RAG_MIN_SIMILARITY = 55;
+const RAG_MIN_SIMILARITY = 40;
 
 async function tryRAGAnswer(query, obj) {
     if (!obj.db || !obj.db.dbPath) return null;
@@ -42,7 +42,7 @@ async function handle(query,obj){
     })) {
         try {
             const rewritePrompt = buildRewritePrompt(historySnapshot, query);
-            const rewrittenQuery = await rewriteQuery(rewritePrompt, obj.groq_api);
+            const rewrittenQuery = await rewriteQuery(rewritePrompt, obj.llm_config);
             effectiveQuery = finalizeRewrite(query, rewrittenQuery);
         } catch (_) {
         }
@@ -129,11 +129,11 @@ async function handle(query,obj){
     } else {
         let p= await resolvePluginIntent(routingQuery,obj);
         if(p.isPlugin==true){
-            const pluginResult = await handlePlugin(p.plugin, p.function, routingQuery, obj.groq_api, obj);
+            const pluginResult = await handlePlugin(p.plugin, p.function, routingQuery, obj.llm_config, obj);
             return finalize(pluginResult, `${p.plugin.data.name}.${p.function.name}`, pluginResult, "text");
         } else {
             // Plain LLM fallback
-            const llmResponse = await answer(routingQuery, obj.groq_api, false, obj);
+            const llmResponse = await answer(routingQuery, obj.llm_config, false, obj);
             return finalize(llmResponse, null, null, "text");
         }
     }

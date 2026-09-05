@@ -1,13 +1,13 @@
 const http = require("http");
 const path = require("path");
-const { Interpreter } = require("./src/index.js");
+const { Interpreter, resolveLlmConfig } = require("./src/index.js");
 const dotenv = require("dotenv");
 
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 function createInterpreter() {
   const config = JSON.parse(JSON.stringify(require(path.resolve(__dirname, "config.json"))));
-  const intr = new Interpreter({ groq_api_key: (config.groq_api_key || process.env.gapi) });
+  const intr = new Interpreter({ llm_config: resolveLlmConfig(config) });
 
   config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key == "" || !config.plugins.tavily.tavily_api_key) ? process.env.tapi : config.plugins.tavily.tavily_api_key;
   config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key == "" || !config.plugins.weather.weather_api_key) ? process.env.wapi : config.plugins.weather.weather_api_key;

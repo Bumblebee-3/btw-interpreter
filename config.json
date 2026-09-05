@@ -1,5 +1,16 @@
 {
     "groq_api_key":"",
+    "llm":{
+        "provider":"groq",
+        "base_url":"https://api.groq.com/openai/v1",
+        "api_key_env":"GROQ_API_KEY",
+        "models":{
+            "default":"openai/gpt-oss-120b",
+            "small":"openai/gpt-oss-20b",
+            "embedding":null
+        },
+        "extra_headers":{}
+    },
     "rag":{
         "location":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/lancedb/",
         "table_limit":{

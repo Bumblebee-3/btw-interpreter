@@ -1,6 +1,5 @@
 const R = require('./response.js');
 const { loadPlugin } = require("./pluginHandler.js");
-const { answer, answerSmall } = require("./groq.js");
 
 // ─── Normalization ────────────────────────────────────────────────────────────
 

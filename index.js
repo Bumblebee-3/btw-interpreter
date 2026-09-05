@@ -5,7 +5,7 @@ if (process.argv.length > 2) {
 
 module.exports = {originalLog};
 const path = require("path");
-const {Interpreter} = require("./src/index.js")
+const {Interpreter, resolveLlmConfig} = require("./src/index.js")
 const dotenv = require("dotenv");
 dotenv.config({
   path: path.resolve(__dirname, ".env")
@@ -14,7 +14,7 @@ dotenv.config({
 
 var config = require((path.resolve(__dirname, "config.json")))
 
-var intr = new Interpreter({ groq_api_key:(config.groq_api_key || process.env.gapi) });
+var intr = new Interpreter({ llm_config: resolveLlmConfig(config) });
 
 config.plugins.tavily.tavily_api_key = (config.plugins.tavily.tavily_api_key==""||!config.plugins.tavily.tavily_api_key)?process.env.tapi:config.plugins.tavily.tavily_api_key;
 config.plugins.weather.weather_api_key = (config.plugins.weather.weather_api_key==""||!config.plugins.weather.weather_api_key)?process.env.wapi:config.plugins.weather.weather_api_key;

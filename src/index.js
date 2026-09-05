@@ -2,7 +2,47 @@ let fs = require("fs");
 let path = require("path");
 const queryHandler = require("./interpreter/index.js");
 
-const {answer,answerSmall} = require("./interpreter/groq.js");
+const {answer,answerSmall} = require("./interpreter/llm.js");
+
+const LLM_DEFAULTS = {
+    groq: { base_url: "https://api.groq.com/openai/v1", api_key_env: "GROQ_API_KEY" },
+    openai: { base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
+    anthropic: { base_url: "https://api.anthropic.com", api_key_env: "ANTHROPIC_API_KEY" },
+    ollama: { base_url: "http://localhost:11434/v1", api_key_env: "" },
+    lmstudio: { base_url: "http://localhost:1234/v1", api_key_env: "" },
+    custom: { base_url: "", api_key_env: "" }
+};
+
+function resolveLlmConfig(config = {}) {
+    const llm = config.llm || {};
+    const legacyKey = config.groq_api_key || process.env.gapi || process.env.GAPI || process.env.groq_api_key || process.env.GROQ_API_KEY;
+
+    if (!config.llm && legacyKey) {
+        return {
+            provider: "groq",
+            base_url: LLM_DEFAULTS.groq.base_url,
+            api_key: legacyKey,
+            models: { default: "moonshotai/kimi-k2-instruct", small: "openai/gpt-oss-20b" },
+            extra_headers: {}
+        };
+    }
+
+    const provider = llm.provider || "groq";
+    const defaults = LLM_DEFAULTS[provider] || LLM_DEFAULTS.custom;
+    const api_key_env = llm.api_key_env ?? defaults.api_key_env;
+    return {
+        provider,
+        base_url: llm.base_url || defaults.base_url,
+        api_key: api_key_env ? (process.env[api_key_env] || "") : "",
+        models: {
+            default: llm.models?.default || "openai/gpt-oss-120b",
+            small: llm.models?.small || "openai/gpt-oss-20b"
+        },
+        extra_headers: llm.extra_headers || {},
+        anthropic_version: llm.anthropic_version || "2023-06-01",
+        anthropic_beta: llm.anthropic_beta || []
+    };
+}
 
 class Interpreter {
     constructor(args){
@@ -10,8 +50,26 @@ class Interpreter {
         this.plugins = [];
         this.workflowState = null;
         this.reminderManager = null;
-        if(!args.groq_api_key) throw new Error("Please provide groq api key!");
-        this.groq_api = args.groq_api_key;
+        if (args.groq_api_key && !args.llm_config) {
+            this.llm_config = {
+                provider: "groq",
+                base_url: "https://api.groq.com/openai/v1",
+                api_key: args.groq_api_key,
+                models: {
+                    default: "moonshotai/kimi-k2-instruct",
+                    small: "openai/gpt-oss-20b"
+                },
+                extra_headers: {}
+            };
+        } else if (args.llm_config) {
+            const envVar = args.llm_config.api_key_env || "";
+            this.llm_config = {
+                ...args.llm_config,
+                api_key: envVar ? (process.env[envVar] || args.llm_config.api_key || "") : (args.llm_config.api_key || "")
+            };
+        } else {
+            throw new Error("Please provide llm_config or groq_api_key!");
+        }
         this.db = {};
         this.table_config = {};
     }
@@ -121,15 +179,16 @@ class Interpreter {
         this.reminderManager = new ReminderManager(options);
         this.reminderManager.start();
     }
-    async customQuery(query,model="openai/gpt-oss-120b"){
-        return await answer(query,this.groq_api,true,this,model);
+    async customQuery(query,model){
+        return await answer(query,this.llm_config,true,this,model);
     }
     async customSmallQuery(query){
-        return await answerSmall(query,this.groq_api,true,this);
+        return await answerSmall(query,this.llm_config,true,this);
     }
 
 }
 
 module.exports = {
-    Interpreter
+    Interpreter,
+    resolveLlmConfig
 }

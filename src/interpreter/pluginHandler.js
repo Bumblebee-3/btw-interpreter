@@ -1,7 +1,7 @@
 //REQUIRES AI LAYER
 
 const path = require("path");
-const {answer,plugin_answer, callGroqSMALL, extractGroqContent} = require("./groq.js");
+const {answer,plugin_answer, callLLMSmall, extractContent} = require("./llm.js");
 
 function buildFunctionCatalog(plugins) {
     const catalog = [];
@@ -62,17 +62,17 @@ ${JSON.stringify(catalog, null, 2)}`;
 }
 
 async function classifyPluginIntentWithLLM(query, obj) {
-    if (!obj || !obj.groq_api) return { isPlugin: false };
+    if (!obj || !obj.llm_config) return { isPlugin: false };
 
     const catalog = buildFunctionCatalog(obj.plugins);
     if (!catalog.length) return { isPlugin: false };
 
     try {
         const payload = await Promise.race([
-            callGroqSMALL(buildRoutingPrompt(query, catalog), obj.groq_api),
+            callLLMSmall(buildRoutingPrompt(query, catalog), obj.llm_config),
             new Promise((_, reject) => setTimeout(() => reject(new Error("LLM routing timeout")), 5000))
         ]);
-        const raw = extractGroqContent(payload);
+        const raw = extractContent(payload, obj.llm_config.provider);
         const match = String(raw || "").match(/\{[\s\S]*\}/);
         if (!match) return { isPlugin: false };
         const parsed = JSON.parse(match[0]);
@@ -124,7 +124,7 @@ async function callPluginFunction(instance, funcd, input) {
     return await instance[method](input);
 }
 
-async function handlePlugin(plugin,func,query,gapi,ctx){
+async function handlePlugin(plugin,func,query,apiConfig,ctx){
     const pluginInstance = loadPlugin(plugin, plugin.params);
     const result = await callPluginFunction(pluginInstance,func,query);
     
@@ -136,9 +136,9 @@ async function handlePlugin(plugin,func,query,gapi,ctx){
     } else {
         // For plugins that do require LLM, we process with plugin_answer
         if(func.custom_prompt==true){
-            return await answer(query,gapi,true,ctx);
+            return await answer(query,apiConfig,true,ctx);
         }
-        return await plugin_answer(query,gapi,func,result,ctx);
+        return await plugin_answer(query,apiConfig,func,result,ctx);
     }
 }
 

@@ -3,22 +3,10 @@ dotenv.config();
 
 // interactive.js
 const path = require("path");
-const { Interpreter } = require("./src/index.js");
+const { Interpreter, resolveLlmConfig } = require("./src/index.js");
 const config = require("./config.json");
 
-const resolvedGroqKey =
-  config.groq_api_key ||
-  process.env.gapi ||
-  process.env.GAPI ||
-  process.env.groq_api_key ||
-  process.env.GROQ_API_KEY;
-
-if (!resolvedGroqKey) {
-  console.error("Missing GROQ API key. Set one of: config.groq_api_key, gapi, GAPI, groq_api_key, GROQ_API_KEY");
-  process.exit(1);
-}
-
-const intr = new Interpreter({ groq_api_key: resolvedGroqKey });
+const intr = new Interpreter({ llm_config: resolveLlmConfig(config) });
 
 // attach interpreter to plugin params so plugins can call back to LLM
 config.plugins.gmail.obj = intr;

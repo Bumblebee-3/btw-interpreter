@@ -1,5 +1,5 @@
 //REQUIRES AI LAYER!
-const { callGroqSMALL } = require("./groq.js");
+const { callLLMSmall, extractContent } = require("./llm.js");
 //need to find a better way to do ts 
 
 const { execFile } = require("node:child_process");
@@ -37,22 +37,29 @@ async function checkCommands(input, obj) {
     prompt += "\n";
   }
   prompt += `User Input: "${input}"\n\nIdentify the best matching command and extract parameters if applicable. If no match is found, return null.if match is found output must be json of the format: {"command_id": "matched_command_id", "value": "extracted_value"} or if no match is found output must be "null". PLEASE NOTE: You have to contexxt aware, only if the user intends to execute an action only then must you return that command. If the user is asking for information or help, you must return "null".`;
-  var ans = await callGroqSMALL(prompt, obj.groq_api);
-  //console.log(ans.choices[0].message.content);
-  if (ans.choices[0].message.content === "null") {
+  try {
+    var ans = await callLLMSmall(prompt, obj.llm_config);
+    const content = extractContent(ans, obj.llm_config.provider);
+    if (content === "null") {
+      return { isCommand: false, cmd: null };
+    }
+
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) return { isCommand: false, cmd: null };
+
+    const parsed = JSON.parse(match[0]);
+    const matched = commands.find(c => c.id === parsed.command_id);
+    if (!matched) return { isCommand: false, cmd: null };
+
     return {
-      isCommand: false,
-      cmd: null
+      isCommand: true,
+      cmd: matched,
+      params: parsed.value
     };
+  } catch (error) {
+    console.warn("[commandRouter] LLM command routing failed:", error.message);
+    return { isCommand: false, cmd: null };
   }
-  let parsed=JSON.parse(ans.choices[0].message.content);
-  let matched = commands.find(c => c.id === parsed.command_id);
-  //console.log(matched)
-  return {
-    isCommand: true,
-    cmd: matched,
-    params: parsed.value
-  };
 }
 
 
