@@ -6,6 +6,25 @@ const R = require("./response.js");
 const MessageHistory = require("./messageHistory.js");
 const {buildRewritePrompt, finalizeRewrite, shouldRewriteQuery} = require("./queryRewrite.js");
 
+const RAG_MIN_SIMILARITY = 55;
+
+async function tryRAGAnswer(query, obj) {
+    if (!obj.db || !obj.db.dbPath) return null;
+
+    try {
+        const results = await obj.db.searchDB(query, 5, obj.table_config);
+        if (!results || results.length === 0) return null;
+
+        const top = results[0];
+        const simScore = parseFloat(String(top.similarity || "0").replace("%", ""));
+        if (simScore < RAG_MIN_SIMILARITY) return null;
+
+        return results;
+    } catch (_) {
+        return null;
+    }
+}
+
 async function handle(query,obj){
     // Initialize message history if not exists
     if (!obj.messageHistory) {
@@ -78,6 +97,29 @@ async function handle(query,obj){
     const routingQuery = (pluginFollowUp && typeof pluginFollowUp.rewrittenQuery === "string" && pluginFollowUp.rewrittenQuery.trim())
         ? pluginFollowUp.rewrittenQuery.trim()
         : effectiveQuery;
+
+    // Check confident RAG results before command and plugin routing.
+    const ragResults = await tryRAGAnswer(routingQuery, obj);
+    if (ragResults) {
+        const ragContext = ragResults
+            .map((result) => `${result.text} (similarity: ${result.similarity})`)
+            .join("\n");
+        const ragPrompt =
+            "You are Bumblebee, a helpful voice assistant. " +
+            "Answer the user's question concisely in 1-2 sentences using ONLY the context below. " +
+            "Plain text only, no markdown. If the context does not answer the question, reply with exactly: __RAG_INSUFFICIENT__\n\n" +
+            "Context:\n" + ragContext + "\n\n" +
+            "Question: " + routingQuery;
+        const ragAnswer = await obj.customQuery(ragPrompt);
+
+        const hasRagAnswer = typeof ragAnswer === "string" &&
+            ragAnswer.trim() &&
+            !ragAnswer.includes("__RAG_INSUFFICIENT__") &&
+            !ragAnswer.startsWith("Model error:");
+        if (hasRagAnswer) {
+            return finalize(ragAnswer, "rag", ragResults, "text");
+        }
+    }
 
     let c = await checkCommands(routingQuery,obj);
     //console.log(c);
