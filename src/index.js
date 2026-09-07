@@ -148,6 +148,10 @@ class Interpreter {
     async query(input){
         return await queryHandler.handle(input,this);
     }
+    async processMessage(input, history, options = {}) {
+        if (options.workbench) this.workbench = true;
+        return await this.query(input);
+    }
     loadDB(dbPath="lancedb",table_config){
         const LanceDBWrapper = require("./rag/LanceDBWrapper.js");
         const db = new LanceDBWrapper({

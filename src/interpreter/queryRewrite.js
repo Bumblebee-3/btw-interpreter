@@ -8,7 +8,7 @@ const BROWSER_TOOL_NAMES = new Set([
     "Browser.getPageElements",
     "Browser.getBrowserStatus"
 ]);
-const COMMAND_VERBS = /^(turn|lock|unlock|open|close|start|stop|enable|disable|mute|unmute|increase|decrease|play|pause|resume|launch|restart|shutdown|power off|poweroff|reboot|next|previous|skip|scroll|zoom|screenshot|take screenshot|go back|go forward)\b/i;
+const COMMAND_VERBS = /^(turn|lock|unlock|open|close|start|stop|enable|disable|mute|unmute|increase|decrease|brighten|dim|play|pause|resume|launch|restart|shutdown|power off|poweroff|reboot|next|previous|skip|scroll|zoom|screenshot|take screenshot|go back|go forward)\b/i;
 const MAX_REWRITE_LENGTH = 120;
 
 function normalizeInput(query) {
@@ -31,6 +31,10 @@ function isLikelyCommandQuery(query) {
     }
 
     if (COMMAND_VERBS.test(text)) {
+        return true;
+    }
+
+    if (/^make\s+(?:it|my\s+screen)\s+(?:brighter|dimmer)\b/i.test(text)) {
         return true;
     }
 

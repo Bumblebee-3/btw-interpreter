@@ -13,7 +13,7 @@ function buildFunctionCatalog(plugins) {
                 functionName: String(func?.name || "").trim(),
                 pluginDescription: String(plugin?.data?.description || ""),
                 description: String(func?.description || ""),
-                keywords: Array.isArray(func?.keywords) ? func.keywords.slice(0, 20) : []
+                keywords: Array.isArray(func?.keywords) ? func.keywords : []
             });
         }
     }
@@ -50,11 +50,14 @@ Rules:
 - Only use plugin/function names from the catalog below. Never invent names.
 - route="none" means answer with general LLM knowledge; no plugin is needed.
 - Prefer the most specific function when multiple plugins could apply.
+- Do not route local device-control requests such as changing brightness, volume, locking, or shutting down to a web-search plugin; those belong to the local command router.
 - Email or inbox queries use the Gmail plugin.
 - Browser navigation, URLs, or page inspection use the Browser plugin.
-- Web search, news, or reviews use the Tavily plugin.
+- Use the Tavily plugin for information that should be looked up on the public web rather than answered from model memory.
+- This includes current or time-sensitive facts, factual questions about events in a specific year, sports results or champions, news, reviews, rankings, prices, and questions asking what happened or who won.
+- For example, "who won the Formula 1 championship of 2025" must route to Tavily because the answer is a factual event result that should be verified online.
 - Messaging or chat summaries use the WhatsApp plugin.
-- Confidence below 0.55 must use route="none".
+- Only use route="none" when no catalog function can provide the requested information. Do not lower confidence for a clear Tavily lookup; use confidence 0.8 or higher.
 
 User query: ${JSON.stringify(String(query || ""))}
 Available functions:

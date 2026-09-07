@@ -1,7 +1,7 @@
 const {checkCommands , handleCommand} = require("./commandHandler.js");
 const {resolvePluginIntent , handlePlugin, handlePluginFollowUp} = require("./pluginHandler.js");
 const {handleWorkflowInput} = require("./workflowHandler.js");
-const {answer, rewriteQuery} = require("./llm.js");
+const {answer, callLLM, rewriteQuery, extractContent} = require("./llm.js");
 const R = require("./response.js");
 const MessageHistory = require("./messageHistory.js");
 const {buildRewritePrompt, finalizeRewrite, shouldRewriteQuery} = require("./queryRewrite.js");
@@ -21,6 +21,42 @@ async function tryRAGAnswer(query, obj) {
 
         return results;
     } catch (_) {
+        return null;
+    }
+}
+
+async function arbitrateLowConfidence(query, ragResults, obj) {
+    const pluginCatalog = (obj.plugins || []).map(plugin => plugin?.data || {});
+    const prompt = `You are the final router for a voice assistant. The initial knowledge-base retrieval was low confidence.
+Use BOTH the retrieved RAG data and the available plugin definitions below to decide the best next step.
+Return ONLY valid JSON in this exact format:
+{"route":"rag"|"plugin"|"general","plugin":"exact plugin name or empty string","function":"exact function name or empty string","reason":"brief explanation"}
+
+Rules:
+- Choose "rag" only when the retrieved context directly answers the question.
+- Choose "plugin" when a listed plugin can provide a better or current answer. Use its exact name and function.
+- Choose "general" only when neither the RAG context nor a plugin is suitable.
+- Current, dated, news, sports-result, and public-web factual questions should use a suitable web-search plugin.
+
+Question:
+${query}
+
+Retrieved RAG data:
+${JSON.stringify(ragResults, null, 2)}
+
+Available plugin definitions:
+${JSON.stringify(pluginCatalog, null, 2)}`;
+
+    try {
+        const payload = await callLLM(prompt, obj.llm_config);
+        const raw = extractContent(payload, obj.llm_config.provider);
+        const match = String(raw || "").match(/\{[\s\S]*\}/);
+        if (!match) return null;
+        const decision = JSON.parse(match[0]);
+        if (!["rag", "plugin", "general"].includes(decision.route)) return null;
+        return decision;
+    } catch (error) {
+        console.warn("[ragRouter] Low-confidence arbitration failed:", error.message);
         return null;
     }
 }
@@ -127,6 +163,28 @@ async function handle(query,obj){
         const commandResult = await handleCommand(c.cmd,c.params);
         return finalize(commandResult, `command:${c.cmd.id}`, commandResult, "text");
     } else {
+        const lowConfidenceResults = await obj.db?.searchDB?.(routingQuery, 5, obj.table_config);
+        const topSimilarity = parseFloat(String(lowConfidenceResults?.[0]?.similarity || "0").replace("%", ""));
+        if (lowConfidenceResults?.length && topSimilarity < RAG_MIN_SIMILARITY) {
+            const decision = await arbitrateLowConfidence(routingQuery, lowConfidenceResults, obj);
+            if (decision?.route === "rag") {
+                const ragPrompt = "Answer the user's question using only this retrieved context. If it does not answer the question, say __RAG_INSUFFICIENT__.\n\nContext:\n" + JSON.stringify(lowConfidenceResults) + "\n\nQuestion: " + routingQuery;
+                const ragAnswer = await obj.customQuery(ragPrompt);
+                if (ragAnswer && !ragAnswer.includes("__RAG_INSUFFICIENT__")) {
+                    return finalize(ragAnswer, "rag", lowConfidenceResults, "text");
+                }
+            } else if (decision?.route === "plugin") {
+                const resolved = (obj.plugins || []).flatMap(plugin => (plugin.data.functions || []).map(func => ({ plugin, function: func })))
+                    .find(item => item.plugin.data.name === decision.plugin && item.function.name === decision.function);
+                if (resolved) {
+                    const pluginResult = await handlePlugin(resolved.plugin, resolved.function, routingQuery, obj.llm_config, obj);
+                    return finalize(pluginResult, `${resolved.plugin.data.name}.${resolved.function.name}`, pluginResult, "text");
+                }
+            } else if (decision?.route === "general") {
+                const llmResponse = await answer(routingQuery, obj.llm_config, false, obj);
+                return finalize(llmResponse, null, null, "text");
+            }
+        }
         let p= await resolvePluginIntent(routingQuery,obj);
         if(p.isPlugin==true){
             const pluginResult = await handlePlugin(p.plugin, p.function, routingQuery, obj.llm_config, obj);

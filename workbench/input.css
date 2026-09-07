@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.assistant-content h1,
+.assistant-content h2,
+.assistant-content h3 {
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+}
+
+.assistant-content h1 { font-size: 1.4em; }
+.assistant-content h2 { font-size: 1.2em; }
+.assistant-content h3 { font-size: 1.05em; }
+.assistant-content p { margin-bottom: 0.85em; line-height: 1.75; }
+.assistant-content ul,
+.assistant-content ol { padding-left: 1.5em; margin-bottom: 0.85em; }
+.assistant-content li { margin-bottom: 0.3em; }
+.assistant-content pre {
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 1em;
+  overflow-x: auto;
+  margin-bottom: 1em;
+  position: relative;
+}
+.assistant-content code:not(pre code) {
+  background: #1e1e1e;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.assistant-content pre code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.82em;
+}
+.assistant-content blockquote {
+  border-left: 3px solid #7c6af7;
+  padding-left: 1em;
+  color: #9ca3af;
+  margin: 0 0 0.85em;
+}
+.assistant-content table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+.assistant-content th,
+.assistant-content td { border: 1px solid #2a2a2a; padding: 0.5em 0.75em; }
+.assistant-content th { background: #161616; }
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4em 0.75em;
+  background: #0a0a0a;
+  border-bottom: 1px solid #2a2a2a;
+  border-radius: 10px 10px 0 0;
+  font-size: 0.72em;
+  color: #6b7280;
+  font-family: monospace;
+}
+.copy-btn { cursor: pointer; color: #6b7280; transition: color 0.15s; }
+.copy-btn:hover { color: white; }
+#text-input:empty::before { content: attr(data-placeholder); color: #6b7280; pointer-events: none; }
+.typing { display: inline-flex; gap: 0.3rem; padding: 0.75rem 0; }
+.typing i { width: 0.35rem; height: 0.35rem; border-radius: 9999px; background: #9ca3af; animation: typing-pulse 1s infinite ease-in-out; }
+.typing i:nth-child(2) { animation-delay: 0.15s; }
+.typing i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-pulse {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-0.2rem); }
+}

@@ -28,7 +28,7 @@ async function checkCommands(input, obj) {
   }
   const commands = require(obj.command.location);
 
-  var prompt = "You are a helpful voice assistant named Bumblebee. You are given a list of commands with their details and examples. Your task is to identify if the user's input matches any of the commands based on the examples provided. If a match is found, return the command ID and any parameters extracted from the input. If no match is found, return null.\n\nCommands:\n";
+  var prompt = "You are the local system-command router for a voice assistant. You are given commands and examples. Identify whether the user intends to execute one of these commands. Treat polite filler such as 'please', 'pls', 'bro', and 'btw' as irrelevant. Match semantic equivalents, not only exact wording: 'dim my screen' means decrease screen brightness and must select brightness_down. Local system actions must be selected here instead of being treated as web searches or general questions. If a match is found, return the command ID and any parameters extracted from the input. If no match is found, return null.\n\nCommands:\n";
   for (const cmd of commands) {
     prompt += `Command ID: ${cmd.id}\nDescription: ${cmd.description}\nExamples:\n`;
     for (const example of cmd.examples) {
@@ -79,12 +79,17 @@ async function confirm(title, body) {
 
 
 function runShellCommand(command) {
-  const child = spawn(command, {
-    shell: true,
-    detached: true,
-    stdio: "ignore"
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, {
+      shell: true,
+      stdio: "ignore"
+    });
+    child.once("error", reject);
+    child.once("close", code => {
+      if (code === 0) resolve();
+      else reject(new Error(`Command exited with status ${code}`));
+    });
   });
-  child.unref();
 }
 
 
@@ -129,8 +134,23 @@ async function handleCommand(cmd,params) {
   }
 
   try {
-    let command = resolveCommand(cmd.command.shell_command_template , {value:params});
-    //console.log(params);
+    const parameterNames = Object.keys(cmd.command.parameters || {});
+    const commandParams = params && typeof params === "object"
+      ? params
+      : parameterNames.length === 1 && params != null
+        ? {[parameterNames[0]]: params}
+        : {};
+
+    for (const parameterName of parameterNames) {
+      if (commandParams[parameterName] == null && parameterName === "delta") {
+        commandParams[parameterName] = 5;
+      }
+    }
+
+    const missing = parameterNames.filter(parameterName => commandParams[parameterName] == null);
+    if (missing.length) return `Please specify: ${missing.join(", ")}.`;
+
+    let command = resolveCommand(cmd.command.shell_command_template, commandParams);
     await runShellCommand(command);
     return ("Command executed successfully.");
   } catch (err) {

@@ -3,7 +3,7 @@
     "llm":{
         "provider":"groq",
         "base_url":"https://api.groq.com/openai/v1",
-        "api_key_env":"GROQ_API_KEY",
+        "api_key_env":"gapi",
         "models":{
             "default":"openai/gpt-oss-120b",
             "small":"openai/gpt-oss-20b",
@@ -59,5 +59,10 @@
             "weather_api_key":"",
             "default_location":"mumbai"
         }
+    },
+    "workbench": {
+        "port": 4891,
+        "maxUploadMb": 20,
+        "enableHistory": true
     }
 }
