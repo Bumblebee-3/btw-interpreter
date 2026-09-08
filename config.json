@@ -58,6 +58,10 @@
         "weather":{
             "weather_api_key":"",
             "default_location":"mumbai"
+        },
+        "rag_manager": {
+            "enabled": true,
+            "data_dir": "/home/bumblebee/Desktop/btw-voiceassistant/interpreter/workbench/data/uploads"
         }
     },
     "workbench": {

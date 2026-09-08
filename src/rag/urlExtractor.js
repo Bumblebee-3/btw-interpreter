@@ -64,13 +64,25 @@ async function extractTextFromUrl(url) {
   };
 }
 
+function canonicalUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString();
+  } catch (_) {
+    return value;
+  }
+}
+
 async function crawlUrl(startUrl, options = {}) {
   const maxPages = options.maxPages ?? 1;
   const maxDepth = options.maxDepth ?? 1;
   const allowedPrefixes = Array.isArray(options.allowedPathPrefixes) ? options.allowedPathPrefixes : [];
   const visited = new Set();
+  const queued = new Set([canonicalUrl(startUrl)]);
   const results = [];
-  const queue = [{ url: startUrl, depth: 0 }];
+  const queue = [{ url: canonicalUrl(startUrl), depth: 0 }];
 
   while (queue.length && (maxPages === 0 || results.length < maxPages)) {
     const { url, depth } = queue.shift();
@@ -82,22 +94,27 @@ async function crawlUrl(startUrl, options = {}) {
       if (page.text.length >= 50) {
         results.push({ url, text: page.text, title: page.title });
         console.log(`[URLExtractor] Fetched: ${url} (${page.text.length} chars)`);
+        await options.onProgress?.({ status: "fetched", url, chars: page.text.length, pages: results.length });
       } else {
         console.warn(`[URLExtractor] Skipping ${url}: insufficient text (${page.text.length} chars)`);
+        await options.onProgress?.({ status: "skipped", url, reason: "insufficient text", pages: results.length });
       }
 
-      if (depth < maxDepth && (maxPages === 0 || results.length < maxPages)) {
+      if ((maxDepth === -1 || depth < maxDepth) && (maxPages === 0 || results.length < maxPages)) {
         for (const link of extractInternalLinks(page.html, url)) {
-          if (visited.has(link) || isBinaryUrl(link)) continue;
+          const canonicalLink = canonicalUrl(link);
+          if (visited.has(canonicalLink) || queued.has(canonicalLink) || isBinaryUrl(canonicalLink)) continue;
           if (allowedPrefixes.length) {
-            const linkPath = new URL(link).pathname;
+            const linkPath = new URL(canonicalLink).pathname;
             if (!allowedPrefixes.some((prefix) => linkPath.startsWith(prefix))) continue;
           }
-          queue.push({ url: link, depth: depth + 1 });
+          queued.add(canonicalLink);
+          queue.push({ url: canonicalLink, depth: depth + 1 });
         }
       }
     } catch (error) {
       console.warn(`[URLExtractor] Failed to fetch ${url}: ${error.message}`);
+      await options.onProgress?.({ status: "skipped", url, reason: error.message, pages: results.length });
     }
 
     if (queue.length) await new Promise((resolve) => setTimeout(resolve, 300));
@@ -105,4 +122,4 @@ async function crawlUrl(startUrl, options = {}) {
   return results;
 }
 
-module.exports = { crawlUrl, extractTextFromUrl, extractInternalLinks, isBinaryUrl, extractTextFromHtml };
+module.exports = { crawlUrl, extractTextFromUrl, extractInternalLinks, isBinaryUrl, extractTextFromHtml, canonicalUrl };

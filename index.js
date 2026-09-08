@@ -46,6 +46,11 @@ if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
   intr.loadPlugins("reminder",config.plugins.reminder);
 }
 intr.loadDB(config.rag.location,config.rag.table_limit);
+if (config.plugins.rag_manager && config.plugins.rag_manager.enabled === true) {
+  config.plugins.rag_manager.db = intr.db;
+  config.plugins.rag_manager.data_dir = config.plugins.rag_manager.data_dir || path.join(__dirname, "workbench", "data", "uploads");
+  intr.loadPlugins("rag-manager", config.plugins.rag_manager);
+}
 
 
 //order matters here btw. cuz for matching scores, first plugin will be considered.

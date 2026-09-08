@@ -130,6 +130,7 @@ class LanceDBWrapper {
       maxPages,
       maxDepth: options.maxDepth ?? (maxPages === 1 ? 0 : 1),
       allowedPathPrefixes: options.allowedPathPrefixes,
+      onProgress: options.onProgress,
     });
     if (!pages.length) throw new Error(`No content could be extracted from URL: ${url}`);
 

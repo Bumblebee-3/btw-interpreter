@@ -1,0 +1,12 @@
+{
+  "name": "RAGManager",
+  "description": "Ingest websites, PDFs, and files into the local knowledge base so they can be queried later",
+  "entrypoint": "index.js",
+  "plugin_params": ["db", "data_dir"],
+  "functions": [
+    { "name": "scanUrl", "description": "Crawl and ingest a website or URL into the local knowledge base for future queries", "async": true, "requires_LLM": false, "output_format": "Confirmation message stating how many chunks were inserted from the URL", "keywords": ["scan website", "index website", "add website", "crawl", "ingest url", "add to knowledge base", "scan url", "remember this site", "index this page", "save this website", "learn from", "read this url", "add this link"], "requires": ["$INPUT"] },
+    { "name": "scanFile", "description": "Ingest an uploaded file into the local knowledge base for future queries", "async": true, "requires_LLM": false, "output_format": "Confirmation message stating how many chunks were inserted from the file", "keywords": ["scan file", "index file", "add file", "ingest file", "add to knowledge base", "remember this file", "learn from this file", "read this pdf", "index this document", "add this document", "save this file"], "requires": ["$INPUT"] },
+    { "name": "listDatasets", "description": "List all files and URLs currently indexed in the local knowledge base", "async": true, "requires_LLM": false, "output_format": "List of all indexed sources with their table name and chunk count", "keywords": ["what's in the knowledge base", "list datasets", "show indexed files", "what have you learned", "list knowledge base", "show rag sources"], "requires": ["$INPUT"] },
+    { "name": "removeSource", "description": "Remove a specific file or URL from the local knowledge base", "async": true, "requires_LLM": false, "output_format": "Confirmation that the source was removed from the knowledge base", "keywords": ["remove from knowledge base", "delete from knowledge base", "forget this file", "remove dataset", "unindex", "remove source", "delete source"], "requires": ["$INPUT"] }
+  ]
+}

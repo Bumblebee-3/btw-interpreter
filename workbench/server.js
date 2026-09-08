@@ -11,14 +11,18 @@ const { Interpreter, resolveLlmConfig } = require("../src/index.js");
 const root = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
 const sessionsPath = path.join(dataDir, "sessions.json");
+const uploadsDir = path.join(dataDir, "uploads");
+const ragSourcesPath = path.join(dataDir, "rag-sources.json");
+const crawlJobsPath = path.join(dataDir, "crawl-jobs.json");
 dotenv.config({ path: path.join(root, ".env") });
 const config = JSON.parse(fs.readFileSync(path.join(root, "config.json"), "utf8"));
 const workbenchConfig = config.workbench || {};
 const app = express();
 const sessions = new Map();
+const crawlJobs = new Map();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: (workbenchConfig.maxUploadMb || 20) * 1024 * 1024 }
+  limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 function id() {
@@ -76,7 +80,86 @@ function serializeResult(result) {
   }
 }
 
+function readRagSources() {
+  try { return JSON.parse(fs.readFileSync(ragSourcesPath, "utf8")); }
+  catch (_) { fs.mkdirSync(dataDir, { recursive: true }); fs.writeFileSync(ragSourcesPath, "[]"); return []; }
+}
+
+function writeRagSources(sources) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(ragSourcesPath, JSON.stringify(sources, null, 2));
+}
+
+function addRagSource(record) {
+  const sources = readRagSources().filter(source => source.source !== record.source);
+  sources.push({ id: crypto.randomUUID(), ...record, addedAt: Date.now() });
+  writeRagSources(sources);
+}
+
+function resolveTableName(value) {
+  const table = String(value || "documents").trim();
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(table)) {
+    throw new Error("Table names must start with a letter and contain only letters, numbers, underscores, or hyphens.");
+  }
+  return table;
+}
+
+function saveCrawlJobs() {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(crawlJobsPath, JSON.stringify(Object.fromEntries(crawlJobs), null, 2));
+}
+
+function loadCrawlJobs() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(crawlJobsPath, "utf8"));
+    Object.values(saved).forEach(job => {
+      if (job.status === "running") job.status = "queued";
+      crawlJobs.set(job.id, job);
+    });
+  } catch (error) {
+    if (error.code !== "ENOENT") console.warn("[workbench] Could not load crawl jobs:", error.message);
+  }
+}
+
+function updateCrawlJob(job, patch) {
+  Object.assign(job, patch, { updatedAt: Date.now() });
+  crawlJobs.set(job.id, job);
+  saveCrawlJobs();
+}
+
+async function runCrawlJob(job) {
+  updateCrawlJob(job, { status: "running", current: "Preparing scan" });
+  try {
+    await interpreter.db.deleteBySource(job.table, job.url);
+    const result = await interpreter.db.addUrlToTable(job.table, job.url, {
+      maxPages: job.maxPages,
+      maxDepth: job.maxDepth,
+      prefix: job.prefix,
+      onProgress: event => {
+        updateCrawlJob(job, {
+          current: event.status === "fetched" ? `Fetched ${event.url}` : `Skipped ${event.url}`,
+          lastUrl: event.url,
+          lastStatus: event.status,
+          lastReason: event.reason || "",
+          fetchedPages: event.status === "fetched" ? (job.fetchedPages || 0) + 1 : job.fetchedPages || 0,
+          skippedPages: event.status === "skipped" ? (job.skippedPages || 0) + 1 : job.skippedPages || 0,
+          fetchedChars: (job.fetchedChars || 0) + (event.chars || 0)
+        });
+      }
+    });
+    addRagSource({ type: "url", source: job.url, label: job.label, table: job.table, chunks: result.inserted, pages: result.pages, prefix: job.prefix });
+    updateCrawlJob(job, { status: "completed", current: `Completed: fetched ${job.fetchedPages || result.pages} page(s)`, indexedChunks: result.inserted, fetchedPages: result.pages });
+  } catch (error) {
+    updateCrawlJob(job, { status: "failed", current: "Scan failed", error: error.message });
+  }
+}
+
+function startQueuedCrawlJobs() {
+  for (const job of crawlJobs.values()) if (job.status === "queued") runCrawlJob(job);
+}
+
 loadSessions();
+loadCrawlJobs();
 
 function createInterpreter() {
   const interpreter = new Interpreter({ llm_config: resolveLlmConfig(config) });
@@ -103,6 +186,11 @@ function createInterpreter() {
   if (config.plugins.browser?.enabled) interpreter.loadPlugins("browser", config.plugins.browser);
   if (config.plugins.reminder?.enabled) interpreter.loadPlugins("reminder", config.plugins.reminder);
   interpreter.loadDB(config.rag.location, config.rag.table_limit);
+  if (config.plugins.rag_manager?.enabled) {
+    config.plugins.rag_manager.db = interpreter.db;
+    config.plugins.rag_manager.data_dir = config.plugins.rag_manager.data_dir || uploadsDir;
+    interpreter.loadPlugins("rag-manager", config.plugins.rag_manager);
+  }
   return interpreter;
 }
 
@@ -134,14 +222,99 @@ app.get("/api/sessions", (req, res) => {
   res.json(metadata);
 });
 
+app.get("/api/rag/sources", (req, res) => res.json(readRagSources()));
+
+app.get("/api/rag/tables", async (req, res) => {
+  try {
+    res.json(await interpreter.db.getAllTables());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/rag/text", async (req, res) => {
+  const { text, label = "Text note", table: requestedTable = "documents" } = req.body || {};
+  if (!String(text || "").trim()) return res.status(400).json({ error: "Enter some text to add." });
+  try {
+    const table = resolveTableName(requestedTable);
+    await interpreter.db.ensureTable(table);
+    await interpreter.db.addToTable(table, String(text).trim());
+    addRagSource({ type: "text", source: `text:${crypto.randomUUID()}`, label, table, chunks: 1, prefix: "" });
+    res.json({ ok: true, table });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/rag/crawl-jobs", (req, res) => {
+  res.json([...crawlJobs.values()].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 20));
+});
+
+app.get("/api/rag/crawl-jobs/:id", (req, res) => {
+  const job = crawlJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Crawl job not found" });
+  res.json(job);
+});
+
+app.delete("/api/rag/tables/:table", async (req, res) => {
+  let table;
+  try { table = resolveTableName(req.params.table); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  if (table === "documents") return res.status(400).json({ error: "The default documents table cannot be deleted." });
+  try {
+    await interpreter.db.deleteTable(table);
+    const sources = readRagSources();
+    writeRagSources(sources.filter(source => source.table !== table));
+    res.json({ ok: true, removed: table });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/rag/sources/:id", async (req, res) => {
+  const sources = readRagSources();
+  const entry = sources.find(source => source.id === req.params.id);
+  if (!entry) return res.status(404).json({ error: "Source not found" });
+  await interpreter.db.deleteBySource(entry.table, entry.source);
+  writeRagSources(sources.filter(source => source.id !== entry.id));
+  res.json({ ok: true, removed: entry.label });
+});
+
+app.post("/api/rag/scan-url", async (req, res) => {
+  const { url, label, maxPages: requestedMaxPages = 1, maxDepth: requestedMaxDepth = 0, table: requestedTable = "documents" } = req.body || {};
+  if (!/^https?:\/\//i.test(String(url || ""))) return res.status(400).json({ error: "Please provide a valid http(s) URL" });
+  let table;
+  try { table = resolveTableName(requestedTable); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  try {
+    const prefix = `${label || new URL(url).hostname}: `;
+    const maxPages = Number(requestedMaxPages);
+    const maxDepth = Number(requestedMaxDepth);
+    if (!Number.isInteger(maxPages) || maxPages < 0 || !Number.isInteger(maxDepth) || maxDepth < -1) {
+      return res.status(400).json({ error: "maxPages must be 0 or greater and maxDepth must be -1 or greater." });
+    }
+    const job = { id: id(), status: "queued", url, label: label || new URL(url).hostname, table, maxPages, maxDepth, prefix, fetchedPages: 0, skippedPages: 0, fetchedChars: 0, indexedChunks: 0, createdAt: Date.now(), updatedAt: Date.now() };
+    crawlJobs.set(job.id, job);
+    saveCrawlJobs();
+    runCrawlJob(job);
+    res.status(202).json({ ok: true, jobId: job.id });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   const session = getSession(req.body.sessionId);
   if (!session) return res.status(400).json({ error: "Invalid session" });
   if (!req.file) return res.status(400).json({ error: "No file supplied" });
 
   const file = req.file;
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const filePath = path.join(uploadsDir, `${crypto.randomUUID()}_${safeName}`);
+  fs.writeFileSync(filePath, file.buffer);
   const extension = path.extname(file.originalname).toLowerCase();
-  const allowedExtensions = new Set([".txt", ".json", ".md", ".js", ".ts", ".py", ".rs", ".cpp", ".h", ".toml", ".sh"]);
+  const allowedExtensions = new Set([".txt", ".json", ".md", ".js", ".ts", ".py", ".rs", ".cpp", ".h", ".toml", ".sh", ".pdf", ".csv"]);
   const accepted = file.mimetype.startsWith("text/") || file.mimetype === "application/json" ||
     file.mimetype === "application/pdf" || file.mimetype.startsWith("image/") || allowedExtensions.has(extension);
   if (!accepted) return res.status(415).json({ error: "Unsupported file type" });
@@ -158,8 +331,18 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
     content = file.buffer.toString("utf8");
   }
   const fileId = id();
-  session.files.set(fileId, { name: file.originalname, mimeType: file.mimetype, content, size: file.size });
-  res.json({ fileId, name: file.originalname, size: file.size, type: file.mimetype, preview: content.slice(0, 200) });
+  session.files.set(fileId, { name: file.originalname, mimeType: file.mimetype, content, size: file.size, filePath });
+  if (req.body.context === "dataset") {
+    try {
+      const table = resolveTableName(req.body.table || "documents");
+      const result = await interpreter.db.addFileToTable(table, filePath, { prefix: `${file.originalname}: ` });
+      addRagSource({ type: "file", source: filePath, label: file.originalname, originalName: file.originalname, table, chunks: result.inserted, prefix: `${file.originalname}: ` });
+      return res.json({ fileId, name: file.originalname, filePath, size: file.size, type: file.mimetype, preview: content.slice(0, 200), indexed: true, inserted: result.inserted });
+    } catch (error) {
+      return res.status(422).json({ error: error.message });
+    }
+  }
+  res.json({ fileId, name: file.originalname, filePath, size: file.size, type: file.mimetype, preview: content.slice(0, 200) });
 });
 
 app.post("/api/chat", async (req, res) => {
@@ -168,7 +351,9 @@ app.post("/api/chat", async (req, res) => {
   if (!session) return res.status(400).json({ error: "Session not found" });
   const files = fileIds.map(fileId => session.files.get(fileId)).filter(Boolean);
   const fileContext = files.map(file => `\n\n[Attached file: ${file.name}]\n${file.mimeType.startsWith("image/") ? "(Image attached)" : file.content}`).join("");
-  const input = `${String(message).trim()}${fileContext}`.trim() || "[User attached files]";
+  const scanIntent = /\b(scan|index|ingest|add|remember|learn|read|save)\b/i.test(message) && /\b(file|document|pdf|this|knowledge base)\b/i.test(message);
+  const fileTags = scanIntent ? files.map(file => `\n[FILE:path=${file.filePath},name=${file.name}]`).join("") : "";
+  const input = `${String(message).trim()}${fileContext}${fileTags}`.trim() || "[User attached files]";
 
   res.status(200).set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.flushHeaders();
@@ -309,6 +494,7 @@ app.post("/api/abort/:sessionId", (req, res) => {
 
 const port = Number(process.env.WORKBENCH_PORT || workbenchConfig.port) || 4891;
 const server = app.listen(port, "127.0.0.1", () => console.log(`BTW Workbench listening at http://127.0.0.1:${port}`));
+startQueuedCrawlJobs();
 
 function shutdown() {
   saveSessions();

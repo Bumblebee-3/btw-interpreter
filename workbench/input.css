@@ -61,6 +61,20 @@
 .copy-btn { cursor: pointer; color: #6b7280; transition: color 0.15s; }
 .copy-btn:hover { color: white; }
 #text-input:empty::before { content: attr(data-placeholder); color: #6b7280; pointer-events: none; }
+.sidebar-resizer { position: absolute; z-index: 20; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; }
+.sidebar-resizer:hover, .sidebar-resizer.is-dragging { background: #7c6af7; opacity: .55; }
+#sidebar { overflow: hidden; }
+#sidebar .sidebar-brand { min-width: 0; overflow: hidden; white-space: nowrap; }
+#sidebar .sidebar-brand h1 { overflow: hidden; text-overflow: clip; white-space: nowrap; }
+body.sidebar-collapsed #sidebar { width: 0 !important; min-width: 0; max-width: 0; border-right: 0; overflow: hidden; flex-basis: 0; }
+body.sidebar-collapsed #sidebar > * { visibility: hidden; }
+body.sidebar-collapsed #sidebar .sidebar-resizer { display: none; }
+body.sidebar-collapsed #sidebar-restore { display: flex; align-items: center; justify-content: center; }
+body.sidebar-dragging { cursor: col-resize; user-select: none; }
+@media (max-width: 700px) {
+  #sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; }
+  body.sidebar-collapsed #sidebar { width: 0 !important; }
+}
 .typing { display: inline-flex; gap: 0.3rem; padding: 0.75rem 0; }
 .typing i { width: 0.35rem; height: 0.35rem; border-radius: 9999px; background: #9ca3af; animation: typing-pulse 1s infinite ease-in-out; }
 .typing i:nth-child(2) { animation-delay: 0.15s; }

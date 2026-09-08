@@ -99,6 +99,7 @@ class Interpreter {
             else if(location=="browser"){location=__dirname+"/plugins/browser/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="whatsapp"){location=__dirname+"/plugins/whatsapp/plugindata.json";location=location.replace("/src/","/");try{const b = require("baileys");if(!b){throw new Error("missing");}}catch(err){console.log("Please install baileys via npm.");process.exit(0);}}
             else if(location=="reminder"){location=__dirname+"/plugins/reminder/plugindata.json";location=location.replace("/src/","/")}
+            else if(location=="rag-manager"){location=__dirname+"/plugins/rag-manager/plugindata.json";location=location.replace("/src/","/")}
             const resolvedPath = path.resolve(location);
             const dir = path.dirname(resolvedPath);
             if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {

@@ -1,5 +1,5 @@
 (() => {
-  const state = { sessionId: null, pendingFiles: [], streaming: false, reader: null, userScrolled: false, sessions: [], tab: 'workbench', history: [] };
+  const state = { sessionId: null, pendingFiles: [], streaming: false, reader: null, userScrolled: false, sessions: [], tab: 'workbench', history: [], datasets: [], crawlJobs: [], ragTables: [], selectedRagTable: 'documents', datasetMode: 'text' };
   const messages = document.querySelector('#messages-container');
   const input = document.querySelector('#text-input');
   const send = document.querySelector('#send-btn');
@@ -14,9 +14,83 @@
   const sessionList = document.querySelector('#session-list');
   const conversationTab = document.querySelector('#conversation-tab');
   const workbenchTab = document.querySelector('#workbench-tab');
+  const datasetsTab = document.querySelector('#datasets-tab');
+  const datasetsPanel = document.querySelector('#datasets-panel');
+  const datasetsList = document.querySelector('#datasets-list');
+  const datasetsStats = document.querySelector('#datasets-stats');
+  const datasetsError = document.querySelector('#datasets-error');
+  const scanProgress = document.querySelector('#scan-progress');
+  const urlInput = document.querySelector('#url-input');
+  const scanUrlButton = document.querySelector('#scan-url-btn');
+  const datasetFileInput = document.querySelector('#dataset-file-input');
+  const attachDatasetButton = document.querySelector('#attach-dataset-btn');
+  const ragTableTabs = document.querySelector('#rag-table-tabs');
+  const addTextMode = document.querySelector('#add-text-mode');
+  const addFileMode = document.querySelector('#add-file-mode');
+  const addUrlMode = document.querySelector('#add-url-mode');
+  const addTextForm = document.querySelector('#add-text-form');
+  const addFileForm = document.querySelector('#add-file-form');
+  const addUrlForm = document.querySelector('#add-url-form');
+  const addTextButton = document.querySelector('#add-text-btn');
+  const textContentInput = document.querySelector('#text-content-input');
+  const textLabelInput = document.querySelector('#text-label-input');
+  const datasetFileName = document.querySelector('#dataset-file-name');
+  const deleteTableButton = document.querySelector('#delete-table-btn');
+  const crawlPagesSelect = document.querySelector('#crawl-pages-select');
+  const crawlDepthSelect = document.querySelector('#crawl-depth-select');
   const main = document.querySelector('#main');
   const debugPanel = document.querySelector('#debug-panel');
   const debugBody = document.querySelector('#debug-body');
+  const sidebar = document.querySelector('#sidebar');
+  const sidebarToggle = document.querySelector('#sidebar-toggle');
+  const sidebarRestore = document.querySelector('#sidebar-restore');
+
+  function setSidebarCollapsed(collapsed) {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    sidebarToggle.innerHTML = collapsed ? '&#8250;' : '&#8249;';
+    sidebarToggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    sidebarRestore.classList.toggle('hidden', !collapsed);
+    localStorage.setItem('btw-sidebar-collapsed', String(collapsed));
+  }
+
+  function setSidebarWidth(width) {
+    const nextWidth = Math.max(96, Math.min(Math.floor(window.innerWidth * 0.8), width));
+    sidebar.style.width = `${nextWidth}px`;
+  }
+
+  function setupSidebar() {
+    const resizer = document.createElement('div');
+    resizer.className = 'sidebar-resizer';
+    sidebar.appendChild(resizer);
+    let dragging = false;
+    resizer.addEventListener('pointerdown', event => {
+      if (document.body.classList.contains('sidebar-collapsed')) return;
+      dragging = true;
+      resizer.classList.add('is-dragging');
+      document.body.classList.add('sidebar-dragging');
+      resizer.setPointerCapture(event.pointerId);
+    });
+    resizer.addEventListener('pointermove', event => {
+      if (!dragging) return;
+      if (event.clientX < 96) {
+        dragging = false;
+        resizer.classList.remove('is-dragging');
+        document.body.classList.remove('sidebar-dragging');
+        setSidebarCollapsed(true);
+        return;
+      }
+      setSidebarWidth(event.clientX);
+    });
+    resizer.addEventListener('pointerup', () => {
+      dragging = false;
+      resizer.classList.remove('is-dragging');
+      document.body.classList.remove('sidebar-dragging');
+    });
+    resizer.addEventListener('dblclick', () => setSidebarWidth(256));
+    sidebarToggle.addEventListener('click', () => setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed')));
+    sidebarRestore.addEventListener('click', () => setSidebarCollapsed(false));
+    setSidebarCollapsed(localStorage.getItem('btw-sidebar-collapsed') === 'true');
+  }
 
   async function request(url, options) {
     const response = await fetch(url, options);
@@ -35,13 +109,150 @@
   function switchTab(tab) {
     state.tab = tab;
     const conversation = tab === 'conversation';
-    messages.classList.toggle('hidden', conversation);
+    messages.classList.toggle('hidden', tab !== 'workbench');
     historyPanel.classList.toggle('hidden', !conversation);
+    datasetsPanel.classList.toggle('hidden', tab !== 'datasets');
     inputArea.classList.toggle('hidden', conversation);
+    inputArea.classList.toggle('hidden', tab === 'datasets');
     conversationTab.classList.toggle('bg-white/10', conversation);
     conversationTab.classList.toggle('text-white', conversation);
     workbenchTab.classList.toggle('bg-white/10', !conversation);
     workbenchTab.classList.toggle('text-white', !conversation);
+    datasetsTab.classList.toggle('bg-white/10', tab === 'datasets');
+    datasetsTab.classList.toggle('text-white', tab === 'datasets');
+  }
+
+  function renderDatasetCard(source) {
+    const card = document.createElement('div');
+    card.className = 'source-card group bg-white/5 border border-border rounded-xl px-4 py-3 flex items-start justify-between gap-3 transition-all';
+    const badge = source.type === 'url' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border-purple-500/20';
+    card.innerHTML = `<div class="source-info flex flex-col gap-1 min-w-0"><div class="source-label flex items-center gap-2"><span class="type-badge text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded border ${badge}">${escapeHtml(source.type)}</span><span class="source-name text-sm font-medium truncate">${escapeHtml(source.label || source.source)}</span></div><div class="source-meta text-xs text-muted">${escapeHtml(source.table || 'documents')} · ${source.chunks || 0} chunks · added ${formatDate(source.addedAt)}</div><div class="source-url text-xs text-muted truncate" title="${escapeHtml(source.source)}">${escapeHtml(source.source)}</div></div><div class="source-actions flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button class="view-btn text-xs text-muted hover:text-white" title="Open source">&#8599;</button><button class="delete-btn text-xs text-muted hover:text-red-400" title="Delete source">&times;</button></div>`;
+    card.querySelector('.view-btn').classList.toggle('hidden', source.type !== 'url');
+    card.querySelector('.view-btn').addEventListener('click', () => window.open(source.source, '_blank', 'noopener'));
+    const deleteButton = card.querySelector('.delete-btn');
+    let confirmTimer;
+    deleteButton.addEventListener('click', async () => {
+      if (deleteButton.textContent !== 'Delete?') {
+        deleteButton.textContent = 'Delete?';
+        confirmTimer = setTimeout(() => { deleteButton.textContent = '×'; }, 2000);
+        return;
+      }
+      clearTimeout(confirmTimer);
+      await request(`/api/rag/sources/${source.id}`, { method: 'DELETE' });
+      card.classList.add('opacity-0', 'scale-95');
+      setTimeout(() => { card.remove(); refreshDatasets(); }, 200);
+    });
+    return card;
+  }
+
+  function renderDatasets() {
+    datasetsList.innerHTML = '';
+    const chunks = state.datasets.reduce((total, source) => total + (source.chunks || 0), 0);
+    const tableSources = state.datasets.filter(source => source.table === state.selectedRagTable);
+    const tableChunks = tableSources.reduce((total, source) => total + (source.chunks || 0), 0);
+    datasetsStats.textContent = `${tableSources.length} sources · ${tableChunks} chunks`;
+    if (!tableSources.length) {
+      datasetsList.innerHTML = '<div class="empty-datasets flex flex-col items-center justify-center py-16 gap-3"><span class="text-4xl">&#128452;</span><p class="text-muted text-sm">No sources indexed yet.</p><p class="text-xs text-muted">Paste a URL above or upload a file to get started.</p></div>';
+      return;
+    }
+    tableSources.forEach(source => datasetsList.appendChild(renderDatasetCard(source)));
+  }
+
+  async function refreshDatasets() {
+    datasetsList.innerHTML = '<div class="h-16 rounded-xl bg-white/5 animate-pulse"></div><div class="h-16 rounded-xl bg-white/5 animate-pulse"></div><div class="h-16 rounded-xl bg-white/5 animate-pulse"></div>';
+    state.datasets = await (await request('/api/rag/sources')).json();
+    renderDatasets();
+  }
+
+  function renderCrawlProgress() {
+    const job = state.crawlJobs.find(item => item.status === 'running' || item.status === 'queued') || state.crawlJobs[0];
+    if (!job) { scanProgress.classList.add('hidden'); return; }
+    scanProgress.classList.remove('hidden');
+    const status = job.status === 'completed' ? 'Completed' : job.status === 'failed' ? `Failed: ${job.error || 'unknown error'}` : (job.current || 'Preparing scan');
+    scanProgress.textContent = `${status} · ${job.fetchedPages || 0} fetched · ${job.skippedPages || 0} skipped · ${job.fetchedChars || 0} chars · ${job.indexedChunks || 0} chunks`;
+  }
+
+  async function refreshCrawlJobs() {
+    state.crawlJobs = await (await request('/api/rag/crawl-jobs')).json();
+    renderCrawlProgress();
+  }
+
+  async function refreshRagTables() {
+    const tables = await (await request('/api/rag/tables')).json();
+    state.ragTables = tables;
+    if (!tables.includes(state.selectedRagTable)) state.selectedRagTable = tables.includes('documents') ? 'documents' : tables[0] || 'documents';
+    ragTableTabs.innerHTML = tables.map(table => `<button data-table="${escapeHtml(table)}" class="rag-table-tab whitespace-nowrap rounded-lg px-3 py-2 text-sm ${table === state.selectedRagTable ? 'bg-white/10 text-white' : 'text-muted hover:text-white hover:bg-white/5'}">${escapeHtml(table)}</button>`).join('') + '<button id="new-rag-table-tab" class="whitespace-nowrap rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted hover:text-white">+ New table</button>';
+    ragTableTabs.querySelectorAll('[data-table]').forEach(button => button.addEventListener('click', () => { state.selectedRagTable = button.dataset.table; refreshRagTables(); renderDatasets(); }));
+    document.querySelector('#new-rag-table-tab').addEventListener('click', createNewRagTable);
+  }
+
+  function selectedRagTable() {
+    return state.selectedRagTable;
+  }
+
+  async function createNewRagTable() {
+    const name = window.prompt('New table name');
+    if (!name) return;
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)) { datasetsError.textContent = 'Use a table name starting with a letter; letters, numbers, _ and - are allowed.'; datasetsError.classList.remove('hidden'); return; }
+    state.selectedRagTable = name;
+    await refreshRagTables();
+    renderDatasets();
+  }
+
+  async function deleteSelectedTable() {
+    const table = state.selectedRagTable;
+    if (table === 'documents') {
+      datasetsError.textContent = 'The default documents table cannot be deleted.';
+      datasetsError.classList.remove('hidden');
+      return;
+    }
+    if (deleteTableButton.dataset.confirm !== table) {
+      deleteTableButton.dataset.confirm = table;
+      deleteTableButton.textContent = 'Delete?';
+      setTimeout(() => {
+        if (deleteTableButton.dataset.confirm === table) {
+          deleteTableButton.dataset.confirm = '';
+          deleteTableButton.textContent = 'Delete table';
+        }
+      }, 2000);
+      return;
+    }
+    deleteTableButton.disabled = true;
+    try {
+      await request(`/api/rag/tables/${encodeURIComponent(table)}`, { method: 'DELETE' });
+      deleteTableButton.dataset.confirm = '';
+      deleteTableButton.textContent = 'Delete table';
+      await refreshDatasets();
+      await refreshRagTables();
+    } catch (error) {
+      datasetsError.textContent = error.message;
+      datasetsError.classList.remove('hidden');
+    } finally {
+      deleteTableButton.disabled = false;
+    }
+  }
+
+  async function scanUrl() {
+    const url = urlInput.value.trim();
+    datasetsError.classList.add('hidden');
+    if (!/^https?:\/\//i.test(url)) { datasetsError.textContent = 'Enter a valid http(s) URL.'; datasetsError.classList.remove('hidden'); return; }
+    scanUrlButton.disabled = true; scanUrlButton.textContent = 'Scanning...';
+    scanProgress.classList.remove('hidden');
+    scanProgress.textContent = 'Preparing scan...';
+    try {
+      const table = selectedRagTable();
+      const maxPages = Number(crawlPagesSelect.value);
+      const maxDepth = Number(crawlDepthSelect.value);
+      const response = await request('/api/rag/scan-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, maxPages, maxDepth, table }) });
+      const job = await response.json();
+      state.crawlJobs.unshift(job);
+      renderCrawlProgress();
+      urlInput.value = '';
+      await refreshDatasets();
+      await refreshRagTables();
+    }
+    catch (error) { datasetsError.textContent = error.message; datasetsError.classList.remove('hidden'); }
+    finally { scanUrlButton.disabled = false; scanUrlButton.textContent = 'Scan'; }
   }
 
   function parseMeta(meta) {
@@ -295,6 +506,46 @@
     }
   }
 
+  async function uploadDataset(file) {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('sessionId', state.sessionId);
+    form.append('context', 'dataset');
+    try { form.append('table', selectedRagTable()); }
+    catch (error) { datasetsError.textContent = error.message; datasetsError.classList.remove('hidden'); return; }
+    attachDatasetButton.disabled = true;
+    attachDatasetButton.textContent = 'Indexing...';
+    datasetsError.classList.add('hidden');
+    try { await request('/api/upload', { method: 'POST', body: form }); await refreshDatasets(); await refreshRagTables(); }
+    catch (error) { datasetsError.textContent = error.message; datasetsError.classList.remove('hidden'); }
+    finally { attachDatasetButton.disabled = false; attachDatasetButton.textContent = 'Upload File'; datasetFileInput.value = ''; }
+  }
+
+  async function addTextToTable() {
+    datasetsError.classList.add('hidden');
+    try {
+      await request('/api/rag/text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ table: selectedRagTable(), text: textContentInput.value, label: textLabelInput.value.trim() || 'Text note' }) });
+      textContentInput.value = '';
+      textLabelInput.value = '';
+      await refreshDatasets();
+    } catch (error) { datasetsError.textContent = error.message; datasetsError.classList.remove('hidden'); }
+  }
+
+  function setDatasetMode(mode) {
+    state.datasetMode = mode;
+    addTextForm.classList.toggle('hidden', mode !== 'text');
+    addFileForm.classList.toggle('hidden', mode !== 'file');
+    addUrlForm.classList.toggle('hidden', mode !== 'url');
+    [addTextMode, addFileMode, addUrlMode].forEach(button => {
+      const active = button.dataset.mode === mode;
+      button.classList.toggle('bg-accent', active);
+      button.classList.toggle('text-white', active);
+      button.classList.toggle('border', !active);
+      button.classList.toggle('border-border', !active);
+      button.classList.toggle('text-muted', !active);
+    });
+  }
+
   async function regenerate(wrapper) {
     const assistantIndex = Number(wrapper.dataset.index);
     const userIndex = assistantIndex - 1;
@@ -380,6 +631,9 @@
   async function init() {
     state.sessionId = (await (await request('/api/session/new', { method: 'POST' })).json()).sessionId;
     await refreshSessions();
+    await refreshDatasets();
+    await refreshRagTables();
+    await refreshCrawlJobs();
     switchTab('workbench');
   }
 
@@ -392,6 +646,19 @@
   document.querySelector('#new-chat-btn').addEventListener('click', () => newChat().catch(error => addMessage('error', escapeHtml(error.message))));
   conversationTab.addEventListener('click', () => { switchTab('conversation'); refreshSessions().catch(error => addMessage('error', escapeHtml(error.message))); });
   workbenchTab.addEventListener('click', () => switchTab('workbench'));
+  datasetsTab.addEventListener('click', () => { switchTab('datasets'); Promise.all([refreshDatasets(), refreshRagTables()]).catch(error => { datasetsError.textContent = error.message; datasetsError.classList.remove('hidden'); }); });
+  deleteTableButton.addEventListener('click', deleteSelectedTable);
+  addTextMode.dataset.mode = 'text';
+  addFileMode.dataset.mode = 'file';
+  addUrlMode.dataset.mode = 'url';
+  addTextMode.addEventListener('click', () => setDatasetMode('text'));
+  addFileMode.addEventListener('click', () => setDatasetMode('file'));
+  addUrlMode.addEventListener('click', () => setDatasetMode('url'));
+  addTextButton.addEventListener('click', addTextToTable);
+  scanUrlButton.addEventListener('click', scanUrl);
+  attachDatasetButton.addEventListener('click', () => datasetFileInput.click());
+  datasetFileInput.addEventListener('change', event => { if (event.target.files[0]) { datasetFileName.textContent = event.target.files[0].name; uploadDataset(event.target.files[0]); } });
+  setInterval(() => refreshCrawlJobs().catch(() => {}), 1500);
   historySearch.addEventListener('input', renderSessions);
   document.querySelector('#debug-close').addEventListener('click', closeDebug);
   messages.addEventListener('click', event => {
@@ -403,4 +670,6 @@
   overlay.addEventListener('dragleave', () => overlay.classList.replace('flex', 'hidden'));
   overlay.addEventListener('drop', event => { event.preventDefault(); overlay.classList.replace('flex', 'hidden'); uploadFiles(event.dataTransfer.files); });
   init().catch(error => addMessage('error', escapeHtml(error.message)));
+  setupSidebar();
+  setDatasetMode('text');
 })();
