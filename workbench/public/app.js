@@ -194,9 +194,16 @@
     const name = window.prompt('New table name');
     if (!name) return;
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)) { datasetsError.textContent = 'Use a table name starting with a letter; letters, numbers, _ and - are allowed.'; datasetsError.classList.remove('hidden'); return; }
-    state.selectedRagTable = name;
-    await refreshRagTables();
-    renderDatasets();
+    datasetsError.classList.add('hidden');
+    try {
+      await request('/api/rag/tables', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ table: name }) });
+      state.selectedRagTable = name;
+      await refreshRagTables();
+      renderDatasets();
+    } catch (error) {
+      datasetsError.textContent = error.message;
+      datasetsError.classList.remove('hidden');
+    }
   }
 
   async function deleteSelectedTable() {

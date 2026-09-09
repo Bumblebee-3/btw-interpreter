@@ -232,6 +232,18 @@ app.get("/api/rag/tables", async (req, res) => {
   }
 });
 
+app.post("/api/rag/tables", async (req, res) => {
+  let table;
+  try { table = resolveTableName(req.body?.table); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  try {
+    await interpreter.db.ensureTable(table);
+    res.status(201).json({ ok: true, table });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/rag/text", async (req, res) => {
   const { text, label = "Text note", table: requestedTable = "documents" } = req.body || {};
   if (!String(text || "").trim()) return res.status(400).json({ error: "Enter some text to add." });
