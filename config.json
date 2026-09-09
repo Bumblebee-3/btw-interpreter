@@ -25,6 +25,14 @@
             "country":"india",
             "tavily_api_key":""
         },
+        "codeagent": {
+            "enabled": true,
+            "temp_base_dir": "/tmp/btw-codeagent"
+        },
+        "fileoutput": {
+            "enabled": true,
+            "output_dir": "/tmp/btw-reports"
+        },
         "calendar":{
             "credentials_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/credentials.json",
             "token_path":"/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/token.json"

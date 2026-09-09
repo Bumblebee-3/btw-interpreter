@@ -1,0 +1,94 @@
+{
+    "name": "FileOutput",
+    "description": "Generate PDF or DOCX reports from RAG data, chat history, or web sources, and email them via Gmail",
+    "entrypoint": "index.js",
+    "plugin_params": [
+        "output_dir",
+        "credentials_path",
+        "token_path",
+        "obj"
+    ],
+    "functions": [],
+    "workflows": [
+        {
+            "name": "generate_report",
+            "description": "Collect data from available sources and compile a structured PDF or DOCX report",
+            "keywords": [
+                "generate a report",
+                "create a report",
+                "write a report",
+                "make a report",
+                "export as pdf",
+                "export to pdf",
+                "save as pdf",
+                "export as word",
+                "word document",
+                "docx",
+                "pdf report",
+                "compile a report",
+                "summarize to pdf",
+                "summarize to word",
+                "document this",
+                "output a report"
+            ],
+            "required_params": [
+                {
+                    "name": "report_topic",
+                    "description": "What should the report cover? Be as specific as possible.",
+                    "type": "string"
+                },
+                {
+                    "name": "output_format",
+                    "description": "What format? PDF or Word (docx)?",
+                    "type": "string"
+                }
+            ],
+            "optional_params": [
+                {
+                    "name": "data_sources",
+                    "description": "Where should I pull data from? Options: rag, chat_history, web, all (default: all)",
+                    "type": "string"
+                },
+                {
+                    "name": "report_title",
+                    "description": "What title should the report have?",
+                    "type": "string"
+                },
+                {
+                    "name": "additional_instructions",
+                    "description": "Any specific sections or details you want included?",
+                    "type": "string"
+                }
+            ],
+            "execute": "generateReportWorkflow"
+        },
+        {
+            "name": "email_report",
+            "description": "Email the most recently generated report as an attachment via Gmail",
+            "keywords": [
+                "email the report",
+                "send the pdf",
+                "send the report",
+                "send the document",
+                "email it to",
+                "send report to",
+                "mail the report"
+            ],
+            "required_params": [
+                {
+                    "name": "recipient",
+                    "description": "Who should I send the report to? (name or email)",
+                    "type": "string"
+                }
+            ],
+            "optional_params": [
+                {
+                    "name": "message",
+                    "description": "What message should accompany the report?",
+                    "type": "string"
+                }
+            ],
+            "execute": "emailReportWorkflow"
+        }
+    ]
+}

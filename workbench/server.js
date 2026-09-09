@@ -7,7 +7,8 @@ const crypto = require("crypto");
 const { PDFParse } = require("pdf-parse");
 const MessageHistory = require("../src/interpreter/messageHistory.js");
 const { Interpreter, resolveLlmConfig } = require("../src/index.js");
-
+const codeRouter = require("./codeRouter.js");
+const reportRouter = require("./reportRouter.js");
 const root = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
 const sessionsPath = path.join(dataDir, "sessions.json");
@@ -191,12 +192,26 @@ function createInterpreter() {
     config.plugins.rag_manager.data_dir = config.plugins.rag_manager.data_dir || uploadsDir;
     interpreter.loadPlugins("rag-manager", config.plugins.rag_manager);
   }
+    // CodeAgent plugin
+  if (config.plugins.codeagent && config.plugins.codeagent.enabled !== false) {
+      config.plugins.codeagent.obj = interpreter;
+      interpreter.loadPlugins("codeagent", config.plugins.codeagent);
+  }
+  // FileOutput plugin
+  if (config.plugins.fileoutput && config.plugins.fileoutput.enabled !== false) {
+      config.plugins.fileoutput.obj = interpreter;
+      config.plugins.fileoutput.credentials_path = config.plugins.gmail.credentials_path || "";
+      config.plugins.fileoutput.token_path = config.plugins.gmail.token_path || "";
+      interpreter.loadPlugins("fileoutput", config.plugins.fileoutput);
+  }
   return interpreter;
 }
 
 const interpreter = createInterpreter();
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
+app.use("/api/code", codeRouter);
+app.use("/api/report", reportRouter);
 app.use(express.static(path.join(__dirname, "public")));
 
 function getSession(sessionId) {
@@ -390,6 +405,7 @@ app.post("/api/chat", async (req, res) => {
   try {
     const startedAt = Date.now();
     const result = await interpreter.processMessage(input, session.history, { workbench: true, sessionId });
+    interpreter.sessionId = sessionId; // keep sessionId in sync for plugin use 
     const durationMs = Date.now() - startedAt;
     const fullResponse = typeof result === "string" ? result : result?.content || JSON.stringify(result);
     const rawResult = serializeResult(result) || "null";

@@ -99,6 +99,8 @@ class Interpreter {
             else if(location=="browser"){location=__dirname+"/plugins/browser/plugindata.json";location=location.replace("/src/","/")}
             else if(location=="whatsapp"){location=__dirname+"/plugins/whatsapp/plugindata.json";location=location.replace("/src/","/");try{const b = require("baileys");if(!b){throw new Error("missing");}}catch(err){console.log("Please install baileys via npm.");process.exit(0);}}
             else if(location=="reminder"){location=__dirname+"/plugins/reminder/plugindata.json";location=location.replace("/src/","/")}
+            else if(location==="codeagent"){location=__dirname+"/plugins/codeagent/plugindata.json";location=location.replace("/src/","/");}
+            else if(location==="fileoutput"){location=__dirname+"/plugins/fileoutput/plugindata.json";location=location.replace("/src/","/");}
             else if(location=="rag-manager"){location=__dirname+"/plugins/rag-manager/plugindata.json";location=location.replace("/src/","/")}
             const resolvedPath = path.resolve(location);
             const dir = path.dirname(resolvedPath);
@@ -125,10 +127,12 @@ class Interpreter {
                 }
             }
 
-            if(obj.data.functions.length==0 || obj.data.functions==null){
-                throw new Error(`Misconfigured plugin data file: ${resolvedPath}. There must be atleast one function that the interpreter can call!`);
+            const functions = Array.isArray(obj.data.functions) ? obj.data.functions : [];
+            const workflows = Array.isArray(obj.data.workflows) ? obj.data.workflows : [];
+            if (functions.length === 0 && workflows.length === 0) {
+                throw new Error(`Misconfigured plugin data file: ${resolvedPath}. It must define at least one function or workflow!`);
             }
-            for(let i=0;i<obj.data.functions.length;i++){
+            for(let i=0;i<functions.length;i++){
                 if (!obj.data.functions[i].name) throw new Error(`Misconfigured plugin data file: ${resolvedPath}. Missing requires_LLM in function [${i}]!`);
                 if(!obj.data.functions[i].output_format) throw new Error(`Misconfigured plugin data file: ${resolvedPath}. Missing output_format in function ${obj.data.functions[i].name}!`)
                 
@@ -151,6 +155,7 @@ class Interpreter {
     }
     async processMessage(input, history, options = {}) {
         if (options.workbench) this.workbench = true;
+        if (options.sessionId) this.sessionId = options.sessionId;
         return await this.query(input);
     }
     loadDB(dbPath="lancedb",table_config){

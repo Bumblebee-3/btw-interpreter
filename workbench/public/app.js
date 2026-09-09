@@ -127,8 +127,11 @@
     card.className = 'source-card group bg-white/5 border border-border rounded-xl px-4 py-3 flex items-start justify-between gap-3 transition-all';
     const badge = source.type === 'url' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border-purple-500/20';
     card.innerHTML = `<div class="source-info flex flex-col gap-1 min-w-0"><div class="source-label flex items-center gap-2"><span class="type-badge text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded border ${badge}">${escapeHtml(source.type)}</span><span class="source-name text-sm font-medium truncate">${escapeHtml(source.label || source.source)}</span></div><div class="source-meta text-xs text-muted">${escapeHtml(source.table || 'documents')} · ${source.chunks || 0} chunks · added ${formatDate(source.addedAt)}</div><div class="source-url text-xs text-muted truncate" title="${escapeHtml(source.source)}">${escapeHtml(source.source)}</div></div><div class="source-actions flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button class="view-btn text-xs text-muted hover:text-white" title="Open source">&#8599;</button><button class="delete-btn text-xs text-muted hover:text-red-400" title="Delete source">&times;</button></div>`;
-    card.querySelector('.view-btn').classList.toggle('hidden', source.type !== 'url');
-    card.querySelector('.view-btn').addEventListener('click', () => window.open(source.source, '_blank', 'noopener'));
+    const canOpenSource = source.type === 'url' && /^https?:\/\//i.test(String(source.source || ''));
+    card.querySelector('.view-btn').classList.toggle('hidden', !canOpenSource);
+    card.querySelector('.view-btn').addEventListener('click', () => {
+      if (canOpenSource) window.open(source.source, '_blank', 'noopener');
+    });
     const deleteButton = card.querySelector('.delete-btn');
     let confirmTimer;
     deleteButton.addEventListener('click', async () => {
@@ -377,7 +380,7 @@
       entry.innerHTML = compact
         ? `<span class="truncate flex-1">${escapeHtml(session.title || 'New conversation')}</span><button class="entry-delete opacity-0 group-hover:opacity-100 transition-opacity text-muted hover:text-red-400 text-xs flex-shrink-0" title="Delete conversation">&#128465;</button>`
         : `<div class="min-w-0"><div class="entry-title truncate text-sm text-white">${escapeHtml(session.title || 'New conversation')}</div><div class="entry-meta mt-1 text-xs text-muted">${formatDate(session.updatedAt)} · ${session.messageCount} messages</div></div><button class="entry-delete opacity-0 group-hover:opacity-100 transition-opacity text-muted hover:text-red-400 text-xs flex-shrink-0" title="Delete conversation">&#128465;</button>`;
-      entry.addEventListener('click', () => loadSession(session.id));
+      entry.addEventListener('click', () => loadSession(session.id).catch(error => addMessage('error', escapeHtml(error.message))));
       entry.querySelector('.entry-delete')?.addEventListener('click', event => {
         event.stopPropagation();
         deleteSession(session.id);
@@ -398,7 +401,16 @@
   }
 
   async function loadSession(sessionId) {
-    const session = await (await request(`/api/session/${sessionId}`)).json();
+    let session;
+    try {
+      session = await (await request(`/api/session/${sessionId}`)).json();
+    } catch (error) {
+      if (error.message === 'Session not found') {
+        await newChat();
+        return;
+      }
+      throw error;
+    }
     state.sessionId = session.id;
     showEmptyState();
     state.history = session.history || [];
@@ -476,15 +488,59 @@
     });
   }
 
+  function renderMarkdownFallback(text) {
+    const codeBlocks = [];
+    const tokenPrefix = 'BTW_CODE_BLOCK_';
+    const withoutBlocks = String(text || '').replace(/```([\w-]*)\n?([\s\S]*?)```/g, (_, language, code) => {
+      const token = `${tokenPrefix}${codeBlocks.length}`;
+      codeBlocks.push(`<pre><code class="language-${escapeHtml(language || 'plaintext')}">${escapeHtml(code)}</code></pre>`);
+      return token;
+    });
+    let html = escapeHtml(withoutBlocks)
+      .replace(/^###### (.+)$/gm, '<h6>$1</h6>')
+      .replace(/^##### (.+)$/gm, '<h5>$1</h5>')
+      .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/^\s*[-*] (.+)$/gm, '<li>$1</li>')
+      .replace(/(?:<li>.*<\/li>\n?)+/g, match => `<ul>${match}</ul>`)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+      .replace(/_([^_\n]+)_/g, '<em>$1</em>')
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\n{2,}/g, '<br><br>')
+      .replace(/\n/g, '<br>');
+    codeBlocks.forEach((block, index) => {
+      html = html.replace(`${tokenPrefix}${index}`, block);
+    });
+    return html;
+  }
+
   function renderAssistant(bubble, accumulatedText) {
-    bubble.innerHTML = marked.parse(accumulatedText);
+    var extracted = extractPanelPayload(accumulatedText);
+    var textToRender = extracted.cleanText;
+    if (accumulatedText.indexOf('__PANEL_START__') !== -1 && accumulatedText.indexOf('__PANEL_END__') === -1) textToRender = '_⚙️ Building..._';
+    var withBadges = textToRender.replace(/%%RAG\[[^\]]*\]%%/g, function(_, attrs) {
+      var table = '', sim = '', preview = '';
+      var tableMatch = attrs.match(/table=([^,\]]+)/);
+      var simMatch = attrs.match(/sim=([^,\]]+)/);
+      var previewMatch = attrs.match(/preview=(.+)$/);
+      if (tableMatch) table = tableMatch[1].trim();
+      if (simMatch) sim = simMatch[1].trim();
+      if (previewMatch) preview = previewMatch[1].trim();
+      var simNum = parseFloat(sim);
+      var dotColor = simNum >= 50 ? '#4ade80' : simNum >= 30 ? '#facc15' : '#9ca3af';
+      var tipText = '📚 ' + escapeHtml(table) + ' · ' + escapeHtml(sim) + ' match\n' + escapeHtml(preview);
+      return '<sup style="cursor:help;font-size:0.6em;color:#7c6af7;margin-left:1px;vertical-align:super;text-decoration:none;font-family:monospace" title="' + tipText.replace(/"/g, '&quot;') + '"><span style="background:rgba(124,106,247,0.15);border:1px solid rgba(124,106,247,0.3);border-radius:9999px;padding:0 3px;color:' + dotColor + '">📚</span></sup>';
+    });
+    bubble.innerHTML = marked.parse(withBadges);
     hljs.highlightAll();
     sanitizeBubble(bubble);
-    bubble.querySelectorAll('pre code').forEach(function(block) {
-      hljs.highlightElement(block);
-    });
+    bubble.querySelectorAll('pre code').forEach(function(block) { hljs.highlightElement(block); });
     decorateCode(bubble);
-    if (!state.userScrolled) messages.lastElementChild?.scrollIntoView({ block: 'end' });
+    if (!state.userScrolled) messages.lastElementChild && messages.lastElementChild.scrollIntoView({ block: 'end' });
   }
 
   function renderFiles() {
@@ -604,6 +660,9 @@
           if (payload.type === 'done') {
             full = payload.fullResponse || full;
             renderAssistant(assistant, full);
+            // Open code or report panel if plugin returned a payload
+            var panelExtracted = extractPanelPayload(full);
+            if (panelExtracted.panelData) openPanel(panelExtracted.panelData);
             const meta = parseMeta(payload.meta);
             if (options.replaceAssistant) {
               const record = state.history[assistantIndex];
@@ -635,6 +694,65 @@
     finally { state.reader = null; state.streaming = false; setSendMode(false); abort.classList.add('hidden'); input.focus(); }
   }
 
+
+    // ── Panel payload processing ──────────────────────────────────────────────────
+
+  function extractPanelPayload(text) {
+      // Returns { panelData: object|null, cleanText: string }
+      var startMarker = "__PANEL_START__";
+      var endMarker = "__PANEL_END__";
+      var startIdx = text.indexOf(startMarker);
+      var endIdx = text.indexOf(endMarker);
+
+      if (startIdx === -1 || endIdx === -1) {
+          return { panelData: null, cleanText: text };
+      }
+
+      var jsonStr = text.slice(startIdx + startMarker.length, endIdx);
+      var cleanText = text.slice(endIdx + endMarker.length).trimStart();
+
+      try {
+          var panelData = JSON.parse(jsonStr);
+          return { panelData: panelData, cleanText: cleanText };
+      } catch (_) {
+          return { panelData: null, cleanText: text };
+      }
+  }
+
+  function processRAGMarkers(text) {
+      // Convert %%RAG[table=X,sim=Y,preview=Z]%% to hoverable superscript badges
+      return text.replace(/%%RAG\[([^\]]+)\]%%/g, function(_, attrs) {
+          var table = "", sim = "", preview = "";
+          attrs.split(",").forEach(function(pair) {
+              var parts = pair.split("=");
+              var key = parts[0].trim();
+              var val = parts.slice(1).join("=").trim();
+              if (key === "table") table = val;
+              else if (key === "sim") sim = val;
+              else if (key === "preview") preview = val;
+          });
+          return '<sup class="rag-sup" data-table="' + escapeHtml(table) +
+              '" data-sim="' + escapeHtml(sim) +
+              '" data-preview="' + escapeHtml(preview) +
+              '" title="📚 Source: ' + escapeHtml(table) + ' (' + escapeHtml(sim) + ' match)&#10;' + escapeHtml(preview) + '">📚</sup>';
+      });
+  }
+
+  function openPanel(panelData) {
+      if (!panelData) return;
+      if (panelData.type === "code_project" || panelData.type === "code_run") {
+          if (window.CodePanel) {
+              // Update project name in panel header
+              var nameEl = document.getElementById("code-panel-project-name");
+              if (nameEl) nameEl.textContent = panelData.projectName || "Project";
+              window.CodePanel.open(panelData);
+          }
+      } else if (panelData.type === "report") {
+          if (window.ReportPanel) {
+              window.ReportPanel.open(panelData);
+          }
+      }
+  }
   async function init() {
     state.sessionId = (await (await request('/api/session/new', { method: 'POST' })).json()).sessionId;
     await refreshSessions();

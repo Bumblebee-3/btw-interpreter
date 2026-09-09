@@ -1,0 +1,136 @@
+{
+    "name": "CodeAgent",
+    "description": "Plan, scaffold, browse, run, save and email JavaScript projects from natural language descriptions. Uses local knowledge base when available.",
+    "entrypoint": "index.js",
+    "plugin_params": [
+        "temp_base_dir",
+        "obj"
+    ],
+    "functions": [
+        {
+            "name": "getProjectStatus",
+            "description": "Get the current coding session project status and file list",
+            "async": true,
+            "requires_LLM": false,
+            "output_format": "JSON listing of project files and current session state",
+            "keywords": [
+                "project status",
+                "show files",
+                "what files",
+                "list files",
+                "code status",
+                "current project"
+            ],
+            "requires": ["$INPUT"]
+        }
+    ],
+    "workflows": [
+        {
+            "name": "scaffold_project",
+            "description": "Plan and scaffold a complete JavaScript project from a natural language description, using the local knowledge base for framework-specific code",
+            "keywords": [
+                "create project",
+                "make a bot",
+                "build a bot",
+                "write a bot",
+                "code a bot",
+                "build an app",
+                "write code for",
+                "create a discord bot",
+                "make an economy bot",
+                "scaffold",
+                "create a script",
+                "write a script",
+                "build me",
+                "make me"
+            ],
+            "required_params": [
+                {
+                    "name": "project_description",
+                    "description": "Describe what the project should do, what framework it uses, and what features it needs.",
+                    "type": "string"
+                }
+            ],
+            "optional_params": [
+                {
+                    "name": "project_name",
+                    "description": "What should I name the project folder?",
+                    "type": "string"
+                }
+            ],
+            "execute": "scaffoldProjectWorkflow"
+        },
+        {
+            "name": "run_code",
+            "description": "Run the current project's entry point in a sandboxed Node.js process and stream output",
+            "keywords": [
+                "run the code",
+                "run it",
+                "execute it",
+                "test the code",
+                "start it",
+                "node index",
+                "run the bot",
+                "execute the script"
+            ],
+            "required_params": [],
+            "optional_params": [
+                {
+                    "name": "entry_file",
+                    "description": "Which file to run? (defaults to index.js)",
+                    "type": "string"
+                }
+            ],
+            "execute": "runCodeWorkflow"
+        },
+        {
+            "name": "save_project",
+            "description": "Save the current project from temp storage to a permanent location on disk",
+            "keywords": [
+                "save the project",
+                "save the code",
+                "keep this",
+                "save it permanently",
+                "move to",
+                "copy to"
+            ],
+            "required_params": [],
+            "optional_params": [
+                {
+                    "name": "save_path",
+                    "description": "Where should I save it? (absolute path, defaults to ~/btw-projects/{project_name})",
+                    "type": "string"
+                }
+            ],
+            "execute": "saveProjectWorkflow"
+        },
+        {
+            "name": "email_project",
+            "description": "Zip the current project and send it as a Gmail attachment",
+            "keywords": [
+                "email the code",
+                "send the project",
+                "zip and send",
+                "email it to",
+                "send code to",
+                "attach and send",
+                "mail the project"
+            ],
+            "required_params": [
+                {
+                    "name": "recipient",
+                    "description": "Who should I send it to? (name or email address)",
+                    "type": "string"
+                }
+            ],
+            "optional_params": [
+                {
+                    "name": "message",
+                    "description": "What message should accompany the code?",
+                    "type": "string"
+                }
+            ],
+            "execute": "emailProjectWorkflow"
+        }
+    ]
+}

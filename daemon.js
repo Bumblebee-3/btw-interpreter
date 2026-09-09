@@ -41,6 +41,16 @@ function createInterpreter() {
   if (config.plugins.reminder && config.plugins.reminder.enabled === true) {
     intr.loadPlugins("reminder", config.plugins.reminder);
   }
+  if (config.plugins.codeagent && config.plugins.codeagent.enabled !== false) {
+    config.plugins.codeagent.obj = intr;
+    intr.loadPlugins("codeagent", config.plugins.codeagent);
+  }
+  if (config.plugins.fileoutput && config.plugins.fileoutput.enabled !== false) {
+    config.plugins.fileoutput.obj = intr;
+    config.plugins.fileoutput.credentials_path = config.plugins.gmail.credentials_path || "";
+    config.plugins.fileoutput.token_path = config.plugins.gmail.token_path || "";
+    intr.loadPlugins("fileoutput", config.plugins.fileoutput);
+  }
   
   intr.loadDB(config.rag.location, config.rag.table_limit);
   intr.email = process.env.email;
