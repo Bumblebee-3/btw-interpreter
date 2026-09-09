@@ -427,47 +427,17 @@ class CodeAgent {
             const base64Zip = zipBuffer.toString("base64");
             const zipFilename = `${session.projectName}.zip`;
 
-            // Resolve recipient email
-            const resolution = await gmailInstance.resolveRecipient(recipient);
-            if (!resolution.ok) {
-                return `Zipped project at \`${zipPath}\`. Could not resolve recipient: ${resolution.message}`;
-            }
-
             const subject = `${session.projectName} — code from BTW`;
-            const body = String(params.message || `Please find the ${session.projectName} project attached as a zip file.`);
-
-            const lines = [
-                `To: ${resolution.email}`,
-                "Content-Type: multipart/mixed; boundary=\"btw_boundary\"",
-                "MIME-Version: 1.0",
-                `Subject: ${subject}`,
-                "",
-                "--btw_boundary",
-                "Content-Type: text/plain; charset=\"UTF-8\"",
-                "",
-                body,
-                "",
-                "--btw_boundary",
-                `Content-Type: application/zip; name="${zipFilename}"`,
-                "Content-Transfer-Encoding: base64",
-                `Content-Disposition: attachment; filename="${zipFilename}"`,
-                "",
-                base64Zip,
-                "--btw_boundary--"
-            ];
-
-            const raw = Buffer.from(lines.join("\n"))
-                .toString("base64")
-                .replace(/\+/g, "-")
-                .replace(/\//g, "_")
-                .replace(/=+$/g, "");
-
-            await gmailInstance.gmail.users.messages.send({
-                userId: "me",
-                requestBody: { raw }
-            });
-
-            return `Project \`${session.projectName}\` zipped and sent to **${resolution.name || resolution.email}** successfully.`;
+            return await gmailInstance.sendEmailWorkflow({
+                recipient,
+                subject,
+                body: String(params.message || `Please find the ${session.projectName} project attached.`),
+                attachment: {
+                    mimeType: "application/zip",
+                    filename: zipFilename,
+                    base64: base64Zip
+                }
+            }, context);
         } catch (err) {
             return `Zipped to \`${zipPath}\` but email failed: ${err.message}`;
         }

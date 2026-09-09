@@ -374,11 +374,6 @@ class FileOutput {
         try {
             const { loadPlugin } = require("../../src/interpreter/pluginHandler.js");
             const gmailInstance = loadPlugin(gmailPlugin, gmailPlugin.params);
-            const resolution = await gmailInstance.resolveRecipient(recipient);
-            if (!resolution.ok) {
-                return `Could not resolve recipient: ${resolution.message}`;
-            }
-
             const fileBuffer = fs.readFileSync(reportMeta.filePath);
             const base64File = fileBuffer.toString("base64");
             const mimeType = reportMeta.format === "pdf"
@@ -388,38 +383,16 @@ class FileOutput {
             const subject = `Report: ${reportMeta.title}`;
             const body = String(params.message || `Please find the report "${reportMeta.title}" attached.`);
 
-            const lines = [
-                `To: ${resolution.email}`,
-                `Content-Type: multipart/mixed; boundary="btw_report_boundary"`,
-                "MIME-Version: 1.0",
-                `Subject: ${subject}`,
-                "",
-                "--btw_report_boundary",
-                `Content-Type: text/plain; charset="UTF-8"`,
-                "",
+            return await gmailInstance.sendEmailWorkflow({
+                recipient,
+                subject,
                 body,
-                "",
-                "--btw_report_boundary",
-                `Content-Type: ${mimeType}; name="${reportMeta.filename}"`,
-                "Content-Transfer-Encoding: base64",
-                `Content-Disposition: attachment; filename="${reportMeta.filename}"`,
-                "",
-                base64File,
-                "--btw_report_boundary--"
-            ];
-
-            const raw = Buffer.from(lines.join("\n"))
-                .toString("base64")
-                .replace(/\+/g, "-")
-                .replace(/\//g, "_")
-                .replace(/=+$/g, "");
-
-            await gmailInstance.gmail.users.messages.send({
-                userId: "me",
-                requestBody: { raw }
-            });
-
-            return `Report **"${reportMeta.title}"** sent to **${resolution.name || resolution.email}** successfully.`;
+                attachment: {
+                    mimeType,
+                    filename: reportMeta.filename,
+                    base64: base64File
+                }
+            }, context);
         } catch (err) {
             return `Failed to send report: ${err.message}`;
         }

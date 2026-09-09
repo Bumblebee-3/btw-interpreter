@@ -263,6 +263,15 @@ class Gmail {
         const token = JSON.parse(fs.readFileSync(token_path));
         this.oAuth2Client.setCredentials(token);
 
+        this.oAuth2Client.on("tokens", tokens => {
+            const updatedToken = { ...this.oAuth2Client.credentials, ...tokens };
+            try {
+                fs.writeFileSync(token_path, JSON.stringify(updatedToken, null, 2));
+            } catch (error) {
+                console.warn(`[Gmail] Could not save refreshed token: ${error.message}`);
+            }
+        });
+
         this.gmail = google.gmail({
             version: "v1",
             auth: this.oAuth2Client
@@ -564,15 +573,47 @@ User request:
 
         const recipient = recipientResolution.email;
 
-        const lines = [
-            `To: ${recipient}`,
-            ...(cc ? [`Cc: ${cc}`] : []),
-            "Content-Type: text/plain; charset=\"UTF-8\"",
-            "MIME-Version: 1.0",
-            `Subject: ${subject}`,
-            "",
-            body
-        ];
+        const attachment = params.attachment;
+        let lines;
+        if (attachment) {
+            const filename = String(attachment.filename || "attachment").replace(/[\r\n"\\]/g, "_");
+            const mimeType = String(attachment.mimeType || "application/octet-stream").replace(/[\r\n;]/g, "_");
+            const base64 = String(attachment.base64 || "").replace(/\s/g, "");
+            if (!base64) {
+                return { status: "error", message: "The attachment is empty." };
+            }
+
+            lines = [
+                `To: ${recipient}`,
+                ...(cc ? [`Cc: ${cc}`] : []),
+                "Content-Type: multipart/mixed; boundary=\"btw_mail_boundary\"",
+                "MIME-Version: 1.0",
+                `Subject: ${subject}`,
+                "",
+                "--btw_mail_boundary",
+                "Content-Type: text/plain; charset=\"UTF-8\"",
+                "",
+                body,
+                "",
+                "--btw_mail_boundary",
+                `Content-Type: ${mimeType}; name=\"${filename}\"`,
+                "Content-Transfer-Encoding: base64",
+                `Content-Disposition: attachment; filename=\"${filename}\"`,
+                "",
+                base64,
+                "--btw_mail_boundary--"
+            ];
+        } else {
+            lines = [
+                `To: ${recipient}`,
+                ...(cc ? [`Cc: ${cc}`] : []),
+                "Content-Type: text/plain; charset=\"UTF-8\"",
+                "MIME-Version: 1.0",
+                `Subject: ${subject}`,
+                "",
+                body
+            ];
+        }
 
         const message = lines.join("\n");
         const encodedMessage = Buffer.from(message)
