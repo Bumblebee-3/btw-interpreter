@@ -114,26 +114,70 @@ async function fetchRAGContextForTopic(topic, obj) {
     }
 }
 
-// Generate the content of a single file given its description and any RAG context
+// Parse the suggested wait time out of a Groq rate-limit error message.
+// "Please try again in 11.265s." → 11265 ms
+// Falls back to defaultMs if nothing parseable is found.
+function parseRetryAfterMs(errorMessage, defaultMs) {
+    var match = String(errorMessage || "").match(/try again in\s+([\d.]+)s/i);
+    if (match) {
+        var secs = parseFloat(match[1]);
+        if (Number.isFinite(secs) && secs > 0) {
+            // Add 500ms buffer so we're not right on the edge
+            return Math.ceil(secs * 1000) + 500;
+        }
+    }
+    return defaultMs || 10500;
+}
+
+function sleep(ms) {
+    return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+// Wraps any async fn() and retries forever when a rate-limit error is detected.
+// Non-rate-limit errors are rethrown immediately.
+async function withRateLimitRetry(fn, label) {
+    var attempt = 0;
+    while (true) {
+        try {
+            return await fn();
+        } catch (err) {
+            var msg = String(err && err.message ? err.message : err);
+            var isRateLimit = /rate.?limit|tpm|token.*per.*minute|too many requests|429/i.test(msg);
+            if (!isRateLimit) throw err;
+
+            var waitMs = parseRetryAfterMs(msg, 10500);
+            var waitSec = Math.ceil(waitMs / 1000);
+            attempt++;
+            console.warn(
+                "[CodeAgent] Rate limit hit for " + (label || "request") +
+                " (attempt " + attempt + "). Retrying in " + waitSec + "s..."
+            );
+            await sleep(waitMs);
+        }
+    }
+}
+
 async function generateFileContent(fileSpec, ragContext, obj) {
-    // fileSpec: { path: "commands/balance.js", description: "Shows user cash and bank balance" }
-    const ragBlock = ragContext
-        ? `\nRelevant framework/library documentation from the knowledge base:\n${ragContext}\n`
+    var ragBlock = ragContext
+        ? "\nRelevant framework/library documentation from the knowledge base:\n" + ragContext + "\n"
         : "";
 
-    const prompt = `You are a JavaScript developer. Write the complete contents of the file \`${fileSpec.path}\`.
+    var prompt =
+        "You are a JavaScript developer. Write the complete contents of the file `" + fileSpec.path + "`.\n\n" +
+        "File purpose: " + fileSpec.description + "\n" +
+        ragBlock +
+        "Rules:\n" +
+        "- Output ONLY the raw file content, no markdown fences, no explanation before or after.\n" +
+        "- The code must be complete, runnable, and correct.\n" +
+        "- Use CommonJS (require/module.exports) syntax.\n" +
+        "- Include helpful inline comments.\n" +
+        "- Do not truncate.";
 
-File purpose: ${fileSpec.description}
-${ragBlock}
-Rules:
-- Output ONLY the raw file content, no markdown fences, no explanation before or after.
-- The code must be complete, runnable, and correct.
-- Use CommonJS (require/module.exports) syntax.
-- Include helpful inline comments.
-- Do not truncate.`;
+    var content = await withRateLimitRetry(
+        function() { return obj.customQuery(prompt); },
+        fileSpec.path
+    );
 
-    const content = await obj.customQuery(prompt);
-    // Strip any accidental markdown fences the model adds
     return String(content || "")
         .replace(/^```[a-z]*\n?/m, "")
         .replace(/\n?```$/m, "")
@@ -263,30 +307,40 @@ class CodeAgent {
         const generatedFiles = [];
         const stepLines = [];
 
-        for (const fileSpec of plan.files) {
-            // Fetch RAG context for this specific file
-            const { context: ragContext, attributions } = await fetchRAGContextForTopic(
-                fileSpec.rag_query || fileSpec.description,
-                this.obj
-            );
+        for (var i = 0; i < plan.files.length; i++) {
+            var fileSpec = plan.files[i];
 
-            attribution[fileSpec.path] = attributions;
-
-            let content;
+            // Fetch RAG context — also wrap in retry in case the embedding
+            // model call itself triggers a limit on some providers
+            var ragResult;
             try {
-                content = await generateFileContent(fileSpec, ragContext, this.obj);
+                ragResult = await fetchRAGContextForTopic(
+                    fileSpec.rag_query || fileSpec.description,
+                    this.obj
+                );
+            } catch (_) {
+                ragResult = { context: "", attributions: [] };
+            }
+
+            var content;
+            try {
+                content = await generateFileContent(fileSpec, ragResult.context, this.obj);
             } catch (err) {
-                content = `// Error generating this file: ${err.message}\n`;
+                // Only reaches here for non-rate-limit errors (rate limits are
+                // retried internally by withRateLimitRetry until they succeed)
+                console.error("[CodeAgent] Failed to generate", fileSpec.path, err.message);
+                content = "// Error generating this file: " + err.message + "\n";
             }
 
             writeProjectFile(projectDir, fileSpec.path, content);
             generatedFiles.push({ path: fileSpec.path, language: getLanguageForFile(fileSpec.path) });
 
-            // Build step line with RAG attribution markers if applicable
-            const ragMarker = attributions.length > 0
-                ? ` %%RAG[table=${attributions[0].table},sim=${attributions[0].similarity},preview=${attributions[0].preview}]%%`
+            var ragMarker = ragResult.attributions.length > 0
+                ? " %%RAG[table=" + ragResult.attributions[0].table +
+                  ",sim=" + ragResult.attributions[0].similarity +
+                  ",preview=" + ragResult.attributions[0].preview + "]%%"
                 : "";
-            stepLines.push(`- \`${fileSpec.path}\` — ${fileSpec.description}${ragMarker}`);
+            stepLines.push("- `" + fileSpec.path + "` — " + fileSpec.description + ragMarker);
         }
 
         // Step 3: Generate package.json if not already in files
