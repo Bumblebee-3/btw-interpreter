@@ -522,7 +522,7 @@
     var extracted = extractPanelPayload(accumulatedText);
     var textToRender = extracted.cleanText;
     if (accumulatedText.indexOf('__PANEL_START__') !== -1 && accumulatedText.indexOf('__PANEL_END__') === -1) textToRender = '_⚙️ Building..._';
-    var withBadges = textToRender.replace(/%%RAG\[[^\]]*\]%%/g, function(_, attrs) {
+    var withBadges = textToRender.replace(/%%RAG\[([^\]]*)\]%%/g, function(_, attrs) {
       var table = '', sim = '', preview = '';
       var tableMatch = attrs.match(/table=([^,\]]+)/);
       var simMatch = attrs.match(/sim=([^,\]]+)/);
