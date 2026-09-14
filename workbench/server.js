@@ -9,6 +9,7 @@ const MessageHistory = require("../src/interpreter/messageHistory.js");
 const { Interpreter, resolveLlmConfig } = require("../src/index.js");
 const codeRouter = require("./codeRouter.js");
 const reportRouter = require("./reportRouter.js");
+const resourceRegistry = require("./resourceRegistry.js");
 const root = path.resolve(__dirname, "..");
 const dataDir = path.join(__dirname, "data");
 const sessionsPath = path.join(dataDir, "sessions.json");
@@ -211,7 +212,13 @@ const interpreter = createInterpreter();
 
 app.use(express.json({ limit: "2mb" }));
 app.use("/api/code", codeRouter);
+app.use("/api/resources", resourceRegistry);
+const configuredCodeBaseDir = config.plugins?.codeagent?.temp_base_dir;
+codeRouter.setTempBaseDir(configuredCodeBaseDir
+  ? (path.isAbsolute(configuredCodeBaseDir) ? configuredCodeBaseDir : path.resolve(root, configuredCodeBaseDir))
+  : path.join(root, "workbench", "data", "codeagent"));
 app.use("/api/report", reportRouter);
+app.get("/favicon.ico", (req, res) => res.status(204).end());
 app.use(express.static(path.join(__dirname, "public")));
 
 function getSession(sessionId) {
@@ -384,6 +391,18 @@ app.post("/api/chat", async (req, res) => {
 
   res.status(200).set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.flushHeaders();
+  let pendingAssistantIndex = null;
+  if (!regenerate) {
+    session.history.push({ role: "user", content: message, files: files.map(file => file.name) });
+    pendingAssistantIndex = session.history.length;
+    session.history.push({ role: "assistant", content: "", status: "generating", meta: { query: message } });
+    const firstMessage = String(message || "").replace(/[\r\n]+/g, " ").trim();
+    if (session.history.length === 2) session.title = firstMessage
+      ? firstMessage.slice(0, 40)
+      : `File upload — ${files[0]?.name || "attachment"}`;
+    session.updatedAt = Date.now();
+    saveSessions();
+  }
   session.aborted = false;
   const previousHistory = interpreter.messageHistory;
   const history = new MessageHistory(20);
@@ -436,8 +455,17 @@ app.post("/api/chat", async (req, res) => {
         assistantEntry.content = fullResponse;
         assistantEntry.meta = persistedMeta;
       } else {
-        session.history.push({ role: "user", content: message, files: files.map(file => file.name) });
-        session.history.push({ role: "assistant", content: fullResponse, meta: persistedMeta, versions: [{ content: fullResponse, meta: persistedMeta }], versionIndex: 0 });
+        const pending = Number.isInteger(pendingAssistantIndex) && session.history[pendingAssistantIndex];
+        if (pending) {
+          pending.content = fullResponse;
+          pending.status = "complete";
+          pending.meta = persistedMeta;
+          pending.versions = [{ content: fullResponse, meta: persistedMeta }];
+          pending.versionIndex = 0;
+        } else {
+          session.history.push({ role: "user", content: message, files: files.map(file => file.name) });
+          session.history.push({ role: "assistant", content: fullResponse, meta: persistedMeta, versions: [{ content: fullResponse, meta: persistedMeta }], versionIndex: 0 });
+        }
       }
       meta.versionIndex = versionIndex;
       meta.versionCount = versionCount;
@@ -456,6 +484,27 @@ app.post("/api/chat", async (req, res) => {
       }
       session.updatedAt = Date.now();
       saveSessions();
+      try {
+        const panelMatch = fullResponse.match(/__PANEL_START__(.+?)__PANEL_END__/s);
+        if (panelMatch) {
+          const panelData = JSON.parse(panelMatch[1]);
+          const resourceType = panelData.type === "code_project" ? "code_project" : panelData.format === "docx" ? "docx" : panelData.type === "report" ? "pdf" : panelData.type;
+          const messageIndex = session.history.length - 1;
+          let sections = panelData.sections || [];
+          try {
+            const FileOutput = require("../plugins/fileoutput/index.js");
+            const report = FileOutput._lastReports.get(sessionId);
+            if (report?.sections) sections = report.sections;
+          } catch (_) {}
+          const registryPath = path.join(dataDir, "resources_" + sessionId + ".json");
+          let registry = [];
+          try { registry = JSON.parse(fs.readFileSync(registryPath, "utf-8")); } catch (_) {}
+          registry = registry.filter(item => !(item.messageIndex === messageIndex && item.type === resourceType));
+          registry.push({ id: crypto.randomUUID(), type: resourceType, title: panelData.projectName || panelData.title || "Resource", createdAt: Date.now(), messageIndex, data: panelData, sources: panelData.sources || [], sections });
+          fs.mkdirSync(dataDir, { recursive: true });
+          fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+        }
+      } catch (_) {}
     }
   } catch (error) {
     sendEvent(res, { type: "error", message: error.message || "Interpreter failed" });
@@ -478,6 +527,8 @@ app.get("/api/session/:sessionId/history", (req, res) => {
 });
 
 app.delete("/api/session/:sessionId", (req, res) => {
+  codeRouter.deleteSessionProject(req.params.sessionId);
+  resourceRegistry.clearSession(req.params.sessionId);
   sessions.delete(req.params.sessionId);
   saveSessions();
   res.json({ ok: true });

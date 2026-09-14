@@ -37,13 +37,17 @@ function normalizeDataSources(raw) {
 // ─── Data collection ──────────────────────────────────────────────────────────
 
 async function collectRAGData(topic, obj) {
-    if (!obj.db || !obj.db.dbPath) return [];
+    if (!obj.db || !obj.db.dbPath) return { chunks: [], sources: [] };
     try {
         const results = await obj.db.searchDB(topic, 15, obj.table_config);
-        return (results || []).filter(r =>
+        const usable = (results || []).filter(r =>
             parseFloat(String(r.similarity || "0").replace("%", "")) >= 20
-        ).map(r => r.text);
-    } catch (_) { return []; }
+        );
+        return {
+            chunks: usable.map(r => r.text),
+            sources: usable.map(r => ({ type: "rag", table: r.id ? String(r.id).split(":")[0] : "db", similarity: r.similarity, preview: String(r.text || "").slice(0, 120).replace(/\n/g, " ") }))
+        };
+    } catch (_) { return { chunks: [], sources: [] }; }
 }
 
 async function collectChatHistory(obj) {
@@ -67,14 +71,20 @@ async function collectWebData(topic, obj) {
     const tavilyPlugin = (obj.plugins || []).find(p =>
         String(p?.data?.name || "").toLowerCase() === "tavily"
     );
-    if (!tavilyPlugin) return [];
+    if (!tavilyPlugin) return { chunks: [], sources: [] };
 
     try {
         const { loadPlugin } = require("../../src/interpreter/pluginHandler.js");
         const tavily = loadPlugin(tavilyPlugin, tavilyPlugin.params);
         const result = await tavily.searchOnline(topic);
-        return [String(result || "").replace(/LINK:\[.*?\]/g, "").trim()];
-    } catch (_) { return []; }
+        const raw = String(result || "");
+        const text = raw.replace(/LINK:\[.*?\]/g, "").trim();
+        const linkMatch = raw.match(/LINK:\[(https?:\/\/[^\]]+)\]/);
+        return {
+            chunks: text ? [text] : [],
+            sources: text ? [{ type: "web", url: linkMatch ? linkMatch[1] : "https://www.google.com/search?q=" + encodeURIComponent(topic), title: topic, snippet: text.slice(0, 200) }] : []
+        };
+    } catch (_) { return { chunks: [], sources: [] }; }
 }
 
 // ─── Report structure planning ────────────────────────────────────────────────
@@ -282,17 +292,21 @@ class FileOutput {
 
         // Step 1: Collect data from selected sources
         const allData = [];
+        const allSources = [];
         if (sources.includes("rag")) {
             const ragData = await collectRAGData(topic, this.obj);
-            allData.push(...ragData);
+            allData.push(...ragData.chunks);
+            allSources.push(...ragData.sources);
         }
         if (sources.includes("chat_history")) {
             const chatData = await collectChatHistory(this.obj);
             allData.push(...chatData);
+            if (chatData.length > 0) allSources.push({ type: "chat", count: chatData.length });
         }
         if (sources.includes("web")) {
             const webData = await collectWebData(topic, this.obj);
-            allData.push(...webData);
+            allData.push(...webData.chunks);
+            allSources.push(...webData.sources);
         }
 
         // Step 2: Plan report structure
@@ -324,7 +338,7 @@ class FileOutput {
         }
 
         // Store for email workflow
-        lastReports.set(sessionId, { filePath: outputPath, format, title, filename });
+        lastReports.set(sessionId, { filePath: outputPath, format, title, filename, sections, sources: allSources });
 
         const downloadUrl = `/api/report/download/${sessionId}`;
         const panelPayload = buildPanelPayload("report", {
@@ -332,7 +346,9 @@ class FileOutput {
             filename,
             sessionId,
             downloadUrl,
-            title
+            title,
+            sources: allSources,
+            sections
         });
 
         const sourceList = sources.join(", ");

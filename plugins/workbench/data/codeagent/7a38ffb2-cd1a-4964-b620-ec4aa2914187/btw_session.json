@@ -1,0 +1,60 @@
+{
+  "projectName": "economybot",
+  "projectDir": "/home/bumblebee/Desktop/btw-voiceassistant/interpreter/plugins/workbench/data/codeagent/7a38ffb2-cd1a-4964-b620-ec4aa2914187/economybot",
+  "files": [
+    {
+      "path": "package.json",
+      "language": "json"
+    },
+    {
+      "path": ".env.example",
+      "language": "plaintext"
+    },
+    {
+      "path": "README.md",
+      "language": "markdown"
+    },
+    {
+      "path": "src/index.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/ping.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/balance.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/deposit.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/withdraw.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/buy.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/store.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/inventory.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/commands/rob.js",
+      "language": "javascript"
+    },
+    {
+      "path": "src/store.js",
+      "language": "javascript"
+    }
+  ],
+  "attribution": {},
+  "createdAt": 1789356113884
+}

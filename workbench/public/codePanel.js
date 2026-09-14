@@ -69,17 +69,12 @@
 
         _refreshFileTree: function(files) {
             var self = this;
-            if (files) {
-                this._renderFileTree(files);
-                if (!this.currentFile) {
-                    var first = files.find(function(f) { return f.type === "file"; });
-                    if (first) setTimeout(function() { self.loadFile(first.path); }, 600);
-                }
-                return;
-            }
             if (!this.sessionId) return;
             fetch("/api/code/session/" + encodeURIComponent(this.sessionId))
-                .then(function(r) { return r.json(); })
+                .then(function(r) {
+                    if (!r.ok) throw new Error("HTTP " + r.status);
+                    return r.json();
+                })
                 .then(function(data) {
                     self._renderFileTree(data.files || []);
                     if (!self.currentFile) {
@@ -87,7 +82,10 @@
                         if (first) setTimeout(function() { self.loadFile(first.path); }, 600);
                     } else self._highlightTreeItem(self.currentFile);
                 })
-                .catch(function(err) { console.error("[CodePanel] File tree fetch failed:", err); });
+                .catch(function(err) {
+                    self._renderFileTree([]);
+                    console.warn("[CodePanel] File tree is unavailable:", err.message);
+                });
         },
 
         _renderFileTree: function(files) {
@@ -154,10 +152,11 @@
         },
 
         _initMonaco: function() {
-            if (this.monacoReady && this.editor) return;
+            if ((this.monacoReady && this.editor) || this._monacoLoading) return;
             var container = document.getElementById("monaco-editor-container");
             if (!container) { console.warn("[CodePanel] monaco-editor-container not found"); return; }
             var self = this;
+            this._monacoLoading = true;
             require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs" } });
             require(["vs/editor/editor.main"], function() {
                 if (monaco.languages.json && monaco.languages.json.jsonDefaults) monaco.languages.json.jsonDefaults.setDiagnosticsOptions({ validate: true, enableSchemaRequest: false, schemas: [] });
@@ -167,6 +166,7 @@
                 }
                 self.editor = monaco.editor.create(container, { value: "", language: "javascript", theme: "vs-dark", fontSize: 13, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, wordWrap: "on", lineNumbers: "on", renderWhitespace: "none", padding: { top: 8 } });
                 self.monacoReady = true;
+                self._monacoLoading = false;
                 self.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() { self.saveCurrentFile(); });
                 if (self._pendingFile) { var file = self._pendingFile; self._pendingFile = null; self.loadFile(file); }
             });

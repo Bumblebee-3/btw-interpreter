@@ -71,6 +71,20 @@ function walkDir(dirPath, baseDir) {
     return results;
 }
 
+function persistSessionToDisk(tempBaseDir, sessionId, sessionData) {
+    try {
+        const sessionFile = path.join(tempBaseDir, sessionId, "btw_session.json");
+        ensureDir(path.dirname(sessionFile));
+        fs.writeFileSync(sessionFile, JSON.stringify({
+            projectName: sessionData.projectName,
+            projectDir: sessionData.projectDir,
+            files: sessionData.files,
+            attribution: sessionData.attribution || {},
+            createdAt: sessionData.createdAt || Date.now()
+        }, null, 2));
+    } catch (_) {}
+}
+
 function getLanguageForFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
     const map = {
@@ -239,7 +253,9 @@ Rules:
 
 class CodeAgent {
     constructor(temp_base_dir, obj) {
-        this.tempBaseDir = temp_base_dir || path.join(os.tmpdir(), "btw-codeagent");
+        this.tempBaseDir = temp_base_dir
+            ? (path.isAbsolute(temp_base_dir) ? temp_base_dir : path.resolve(__dirname, "..", temp_base_dir))
+            : path.join(__dirname, "..", "workbench", "data", "codeagent");
         this.obj = obj;
         ensureDir(this.tempBaseDir);
     }
@@ -255,7 +271,9 @@ class CodeAgent {
 
     _setSession(data) {
         const sid = this._getSessionId();
+        if (!data.createdAt) data.createdAt = Date.now();
         sessions.set(sid, data);
+        persistSessionToDisk(this.tempBaseDir, sid, data);
     }
 
     // ── getProjectStatus (function, not workflow) ──────────────────────────────
@@ -360,7 +378,21 @@ class CodeAgent {
         }
 
         // Persist session
-        this._setSession({ projectDir, projectName, files: generatedFiles });
+        this._setSession({ projectDir, projectName, files: generatedFiles, attribution });
+
+        const allSources = [];
+        Object.values(attribution).forEach(function(attrList) {
+            (attrList || []).forEach(function(a) {
+                allSources.push({ type: "rag", table: a.table, similarity: a.similarity, preview: a.preview });
+            });
+        });
+        const seenSources = new Set();
+        const sources = allSources.filter(function(source) {
+            const key = source.table + ":" + source.preview;
+            if (seenSources.has(key)) return false;
+            seenSources.add(key);
+            return true;
+        });
 
         // Build response
         const panelPayload = buildPanelPayload("code_project", {
@@ -368,7 +400,8 @@ class CodeAgent {
             sessionId: this._getSessionId(),
             projectDir,
             files: generatedFiles,
-            attribution
+            attribution,
+            sources
         });
 
         const responseText = [

@@ -9,6 +9,22 @@ const treeKill = require("tree-kill");
 
 const router = express.Router();
 
+let tempBaseDir = path.join(os.tmpdir(), "btw-codeagent");
+router.setTempBaseDir = function (dir) {
+    tempBaseDir = dir;
+};
+
+router.deleteSessionProject = function (sessionId) {
+    const root = path.resolve(tempBaseDir);
+    const sessionDir = path.resolve(root, String(sessionId || ""));
+    if (sessionDir === root || !sessionDir.startsWith(`${root}${path.sep}`)) return false;
+
+    const CodeAgent = getCodeAgent();
+    if (CodeAgent) CodeAgent._sessions.delete(String(sessionId));
+    if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
+    return true;
+};
+
 // Lazily get the CodeAgent session store after plugins are loaded
 function getCodeAgent() {
     try { return require("../plugins/codeagent/index.js"); } catch (_) { return null; }
@@ -51,12 +67,29 @@ function walkDir(dirPath, baseDir) {
     return results;
 }
 
+function getOrRecoverSession(sessionId) {
+    const CodeAgent = getCodeAgent();
+    if (!CodeAgent) return null;
+    const session = CodeAgent._sessions.get(sessionId);
+    if (session && fs.existsSync(session.projectDir)) return session;
+    const sessionFile = path.join(tempBaseDir, sessionId, "btw_session.json");
+    if (!fs.existsSync(sessionFile)) return null;
+    try {
+        const recovered = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
+        if (!recovered.projectDir || !fs.existsSync(recovered.projectDir)) return null;
+        CodeAgent._sessions.set(sessionId, recovered);
+        return recovered;
+    } catch (_) {
+        return null;
+    }
+}
+
 // GET /api/code/session/:sessionId — get project file tree
 router.get("/session/:sessionId", (req, res) => {
     const CodeAgent = getCodeAgent();
     if (!CodeAgent) return res.status(503).json({ error: "CodeAgent plugin not loaded" });
 
-    const session = CodeAgent._sessions.get(req.params.sessionId);
+    const session = getOrRecoverSession(req.params.sessionId);
     if (!session) return res.status(404).json({ error: "No project for this session" });
 
     const files = walkDir(session.projectDir, session.projectDir);
@@ -75,7 +108,7 @@ router.get("/file", (req, res) => {
     const { sessionId, filePath } = req.query;
     if (!sessionId || !filePath) return res.status(400).json({ error: "sessionId and filePath required" });
 
-    const session = CodeAgent._sessions.get(sessionId);
+    const session = getOrRecoverSession(sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
 
     // Security: ensure filePath doesn't escape the project directory
@@ -104,7 +137,7 @@ router.put("/file", express.json({ limit: "2mb" }), (req, res) => {
         return res.status(400).json({ error: "sessionId, filePath, and content required" });
     }
 
-    const session = CodeAgent._sessions.get(sessionId);
+    const session = getOrRecoverSession(sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
 
     const fullPath = resolveProjectPath(session.projectDir, filePath);
@@ -129,7 +162,7 @@ router.post("/run", express.json(), (req, res) => {
     const { sessionId, entryFile = "index.js" } = req.body || {};
     if (!sessionId) return res.status(400).json({ error: "sessionId required" });
 
-    const session = CodeAgent._sessions.get(sessionId);
+    const session = getOrRecoverSession(sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
 
     const safeEntry = String(entryFile).replace(/[^a-zA-Z0-9_\-./]/g, "");
@@ -225,7 +258,7 @@ router.get("/zip/:sessionId", async (req, res) => {
     const CodeAgent = getCodeAgent();
     if (!CodeAgent) return res.status(503).json({ error: "CodeAgent plugin not loaded" });
 
-    const session = CodeAgent._sessions.get(req.params.sessionId);
+    const session = getOrRecoverSession(req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
 
     const zipName = `${session.projectName}.zip`;
@@ -249,7 +282,7 @@ router.post("/save", express.json(), (req, res) => {
     const { sessionId, savePath } = req.body || {};
     if (!sessionId) return res.status(400).json({ error: "sessionId required" });
 
-    const session = CodeAgent._sessions.get(sessionId);
+    const session = getOrRecoverSession(sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
 
     const destination = savePath || path.join(os.homedir(), "btw-projects", session.projectName);

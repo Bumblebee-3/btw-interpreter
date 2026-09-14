@@ -27,7 +27,7 @@
         },
         "codeagent": {
             "enabled": true,
-            "temp_base_dir": "/tmp/btw-codeagent"
+            "temp_base_dir": "workbench/data/codeagent"
         },
         "fileoutput": {
             "enabled": true,

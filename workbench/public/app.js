@@ -412,12 +412,18 @@
       throw error;
     }
     state.sessionId = session.id;
-    showEmptyState();
+    messages.innerHTML = '';
     state.history = session.history || [];
+    if (!state.history.length) showEmptyState();
     session.history.forEach((entry, index) => {
       const meta = entry.role === 'assistant' ? { ...(entry.meta || {}), versionIndex: entry.versionIndex ?? entry.meta?.versionIndex, versionCount: entry.versions?.length || entry.meta?.versionCount || 1 } : entry.meta;
-      appendMessage(entry.role, entry.content, meta, index, entry.versions || []);
+      if (entry.role === 'assistant' && entry.status === 'generating') {
+        addMessage('assistant', '<span class="typing"><i></i><i></i><i></i></span>', '', { index });
+      } else {
+        appendMessage(entry.role, entry.content, meta, index, entry.versions || []);
+      }
     });
+  await loadResourcesForSession(session.id);
     switchTab('workbench');
     await refreshSessions();
     messages.lastElementChild?.scrollIntoView({ block: 'end' });
@@ -619,6 +625,7 @@
 
   async function sendMessage(messageOverride = null, fileIdsOverride = null, options = {}) {
     if (state.streaming) return;
+    const generationSessionId = state.sessionId;
     const text = messageOverride === null ? input.innerText.trim() : String(messageOverride).trim();
     const files = fileIdsOverride === null
       ? state.pendingFiles.slice()
@@ -656,6 +663,7 @@
           const line = event.split('\n').find(item => item.startsWith('data: '));
           if (!line) continue;
           const payload = JSON.parse(line.slice(6));
+          if (payload.type === 'done' && state.sessionId !== generationSessionId) continue;
           if (payload.type === 'token') { full += payload.content; renderAssistant(assistant, full); }
           if (payload.type === 'done') {
             full = payload.fullResponse || full;
@@ -663,6 +671,7 @@
             // Open code or report panel if plugin returned a payload
             var panelExtracted = extractPanelPayload(full);
             if (panelExtracted.panelData) openPanel(panelExtracted.panelData);
+            if (panelExtracted.panelData) registerResourceFromPanel(panelExtracted.panelData, assistantIndex);
             const meta = parseMeta(payload.meta);
             if (options.replaceAssistant) {
               const record = state.history[assistantIndex];
@@ -673,7 +682,16 @@
               record.meta = meta;
               finalizeAssistant(assistant, meta, assistantIndex, record.versions);
             } else {
-              state.history.push({ role: 'assistant', content: full, meta, versions: [{ content: full, meta }], versionIndex: 0 });
+              const pendingRecord = state.history[assistantIndex]?.status === 'generating' ? state.history[assistantIndex] : null;
+              if (pendingRecord) {
+                pendingRecord.content = full;
+                pendingRecord.status = 'complete';
+                pendingRecord.meta = meta;
+                pendingRecord.versions = [{ content: full, meta }];
+                pendingRecord.versionIndex = 0;
+              } else {
+                state.history.push({ role: 'assistant', content: full, meta, versions: [{ content: full, meta }], versionIndex: 0 });
+              }
               finalizeAssistant(assistant, meta, assistantIndex, state.history[assistantIndex].versions);
             }
             await refreshSessions();
@@ -748,14 +766,48 @@
               window.CodePanel.open(panelData);
           }
       } else if (panelData.type === "report") {
-          if (window.ReportPanel) {
+          if (window.DocumentPanel) {
+              window.DocumentPanel.open({ type: panelData.format === "docx" ? "docx" : "pdf", title: panelData.title, data: panelData, sources: panelData.sources || [], sections: panelData.sections || [] });
+          } else if (window.ReportPanel) {
               window.ReportPanel.open(panelData);
           }
       }
   }
+
+  function addResourceButtonToMessage(messageIndex, resource) {
+    var message = document.querySelector('[data-index="' + messageIndex + '"].message.assistant');
+    var actions = message && message.querySelector('.message-actions');
+    if (!actions || actions.querySelector('.resource-btn')) return;
+    var button = document.createElement('button');
+    button.className = 'resource-btn';
+    button.title = 'Open ' + (resource.title || 'resource');
+    button.textContent = ({ code_project: '💻 Code', pdf: '📄 PDF', docx: '📝 DOCX', report: '📊 Report' })[resource.type] || '📦 File';
+    button.addEventListener('click', function () {
+      if (resource.type === 'code_project' && window.CodePanel) window.CodePanel.open(resource.data);
+      else if (window.DocumentPanel) window.DocumentPanel.open(resource);
+    });
+    actions.appendChild(button);
+  }
+
+  function loadResourcesForSession(sessionId) {
+    if (!window.ResourcePanel) return Promise.resolve([]);
+    return window.ResourcePanel.loadFromServer(sessionId).then(function (resources) {
+      resources.forEach(function (resource) { if (resource.messageIndex >= 0) addResourceButtonToMessage(resource.messageIndex, resource); });
+      return resources;
+    });
+  }
+
+  function registerResourceFromPanel(panelData, messageIndex) {
+    if (!window.ResourcePanel || !state.sessionId) return;
+    var type = panelData.type === 'code_project' ? 'code_project' : panelData.format === 'docx' ? 'docx' : panelData.type === 'report' ? 'pdf' : panelData.type;
+    window.ResourcePanel.register(type, panelData.projectName || panelData.title || 'Resource', panelData, panelData.sources || [], panelData.sections || [], messageIndex).then(function () {
+      window.ResourcePanel.getForMessage(messageIndex).forEach(function (resource) { addResourceButtonToMessage(messageIndex, resource); });
+    });
+  }
   async function init() {
     state.sessionId = (await (await request('/api/session/new', { method: 'POST' })).json()).sessionId;
     await refreshSessions();
+    if (window.ResourcePanel) { window.ResourcePanel.init(state.sessionId); await loadResourcesForSession(state.sessionId); }
     await refreshDatasets();
     await refreshRagTables();
     await refreshCrawlJobs();
